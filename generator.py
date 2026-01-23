@@ -80,7 +80,9 @@ def search_card_images(card_name: str, languages=("ja",)):
         if not base:
             return []
 
-        oracle_id = base["oracle_id"]
+        oracle_id = base.get("oracle_id")
+        if not oracle_id:
+            return []
 
         for lang in languages:
             url = "https://api.scryfall.com/cards/search"
@@ -96,7 +98,9 @@ def search_card_images(card_name: str, languages=("ja",)):
 
                 data = r.json()
                 for card in data.get("data", []):
-
+                    temp_oracle_id = card.get("oracle_id")
+                    if not temp_oracle_id:
+                        continue
                     entry = {
                         "card_id": card["id"],
                         "oracle_id": card["oracle_id"],
@@ -161,7 +165,9 @@ def fetch_card(card_name: str, lang: str = "ja"):
 
     # --- Prefer Japanese ---
     if lang == "ja":
-        oracle_id = base["oracle_id"]
+        oracle_id = base.get("oracle_id")
+        if not oracle_id:
+            return []
         r = safe_get(
             session,
             "https://api.scryfall.com/cards/search",
