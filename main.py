@@ -463,6 +463,7 @@ class PlayWindow(QWidget):
         self.image.installEventFilter(self)
 
         self.text = QTextBrowser()
+        self.text.setAlignment(Qt.AlignLeft)
         self.text_font = QFont("", 14)
         self.text.setFont(self.text_font)
 

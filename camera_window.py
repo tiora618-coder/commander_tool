@@ -25,6 +25,9 @@ from PyQt5.QtCore import pyqtSignal
 import torch
 from model_metric import ConvNeXtEmbed
 from log_window import LogWindow, StdoutRedirect
+import platform
+import cv2
+
 
 
 
@@ -191,14 +194,26 @@ def crop_inner(frame, x1, y1, x2, y2, margin=0.05):
         x1 + dx : x2 - dx
     ]
 
+def get_cv_backend():
+    system = platform.system()
+    if system == "Windows":
+        return cv2.CAP_DSHOW
+    elif system == "Darwin":  # macOS
+        return cv2.CAP_AVFOUNDATION
+    else:
+        return 0  # Linux
+
 
 def detect_cameras(max_devices=5):
+    backend = get_cv_backend()
     cams = []
+
     for i in range(max_devices):
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(i, backend)
         if cap.isOpened():
             cams.append(i)
-            cap.release()
+        cap.release()
+
     return cams
 
 
@@ -457,7 +472,8 @@ class CameraWindow(QWidget):
         if self.cap:
             self.cap.release()
 
-        self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+        backend = get_cv_backend()
+        self.cap = cv2.VideoCapture(self.camera_index, backend)
         w, h = RESOLUTIONS[self.resolution_box.currentText()]
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
