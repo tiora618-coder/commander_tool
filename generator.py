@@ -47,7 +47,7 @@ def safe_get(session, url, *, params=None, timeout=5, retries=2, sleep=0.5):
     Safe wrapper around requests.get
     Returns None on failure
     """
-    time.sleep(0.05)
+    time.sleep(0.2)
     for attempt in range(retries + 1):
         try:
             r = session.get(url, params=params, timeout=timeout)
@@ -215,47 +215,192 @@ def safe_filename(text: str) -> str:
     return text
 
 
+def looks_japanese(text: str) -> bool:
+    return bool(re.search(r"[ぁ-んァ-ン一-龯]", text))
+
+def fetch_japanese_text_by_oracle_id(oracle_id: str) -> str:
+    if not oracle_id:
+        return ""
+
+    url = "https://api.scryfall.com/cards/search"
+    params = {
+        "q": f"oracleid:{oracle_id} lang:ja",
+        "unique": "prints",
+    }
+
+    while url:
+        r = safe_get(session, url, params=params, timeout=5)
+        if not r or r.status_code != 200:
+            break
+
+        data = r.json()
+        for card in data.get("data", []):
+            # ---- single-faced ----
+            if "card_faces" not in card:
+                t = card.get("printed_text")
+                if t and looks_japanese(t):
+                    return t
+            # ---- double-faced ----
+            else:
+                texts = []
+                for face in card["card_faces"]:
+                    t = face.get("printed_text")
+                    if t and looks_japanese(t):
+                        texts.append(t)
+                if texts:
+                    return "\n\n".join(texts)
+
+        url = data.get("next_page")
+        params = None
+
+    return ""
+
 
 def get_card_text(card, lang: str = "ja"):
-    """
-    lang:
-      - "ja": Prefer Japanese (printed_text → oracle_text)
-      - "en": English only (oracle_text)
-    """
     if card is None:
         return ""
-    texts = []
 
-    def pick_text(face_or_card):
-        if lang == "ja":
-            return face_or_card.get("printed_text") or face_or_card.get("oracle_text")
+    # ---- English ----
+    if lang == "en":
+        texts = []
+        if "card_faces" in card:
+            for face in card["card_faces"]:
+                t = face.get("oracle_text")
+                if t:
+                    texts.append(t)
         else:
-            return face_or_card.get("oracle_text")
+            t = card.get("oracle_text")
+            if t:
+                texts.append(t)
+        return "\n\n".join(texts)
 
+    # ---- Japanese ----
+    texts = []
+    has_printed = False
+
+    def pick_ja(face_or_card):
+        nonlocal has_printed
+        if face_or_card.get("printed_text"):
+            has_printed = True
+            return face_or_card["printed_text"]
+        return None
+
+    # ① try current card printed_text only
     if "card_faces" in card:
         for face in card["card_faces"]:
-            t = pick_text(face)
+            t = pick_ja(face)
             if t:
                 texts.append(t)
     else:
-        t = pick_text(card)
+        t = pick_ja(card)
         if t:
             texts.append(t)
 
-    return "\n\n".join(texts)
+    # ③ fallback: other JP printings
+    oracle_id = card.get("oracle_id")
+    card_name = card.get("name", "")
 
-def get_card_name(card, lang):
+    if not oracle_id:
+        texts = []
+        if "card_faces" in card:
+            for face in card["card_faces"]:
+                t = face.get("printed_text") or face.get("oracle_text")
+                if t:
+                    texts.append(t)
+        else:
+            t = card.get("printed_text") or card.get("oracle_text")
+            if t:
+                texts.append(t)
+        return "\n\n".join(texts)
+
+    jp_txt = fetch_japanese_text_by_oracle_id(oracle_id)
+    print(card_name + ":" + jp_txt)
+    if jp_txt:
+        return jp_txt
+    return card.get("oracle_text") or ""
+
+
+def fetch_japanese_name_by_oracle_id(oracle_id: str) -> str:
+    if not oracle_id:
+        return ""
+
+    url = "https://api.scryfall.com/cards/search"
+    params = {
+        "q": f"oracleid:{oracle_id} lang:ja",
+        "unique": "prints",
+    }
+
+    while url:
+        r = safe_get(session, url, params=params, timeout=5)
+        if not r or r.status_code != 200:
+            break
+
+        data = r.json()
+        for card in data.get("data", []):
+            # ★ card-level printed_name（単面用）
+            pn = card.get("printed_name")
+            if pn and looks_japanese(pn):
+                return pn
+
+            # ★ Adventure / MDFC 用
+            if "card_faces" in card:
+                names = []
+                for face in card["card_faces"]:
+                    fn = face.get("printed_name")
+                    if fn and looks_japanese(fn):
+                        names.append(fn)
+                if len(names) >= 2:
+                    return " // ".join(names)
+
+        url = data.get("next_page")
+        params = None
+
+    return ""
+
+
+def get_card_name(card, lang: str = "ja"):
     if card is None:
         return ""
-    if lang == "ja":
-        return card.get("printed_name") or card["name"]
-    return card["name"]
+
+    # ---- English ----
+    if lang == "en":
+        return card.get("name", "")
+
+    # ---- Single-faced ----
+    name = card.get("printed_name")
+    if name and looks_japanese(name):
+        return name
+
+    # ---- Adventure / MDFC ----
+    if "card_faces" in card:
+        names = []
+        has_english = False
+
+        for face in card["card_faces"]:
+            pn = face.get("printed_name")
+            if pn and looks_japanese(pn):
+                names.append(pn)
+            else:
+                has_english = True
+                names.append(face.get("name", ""))
+
+        if has_english:
+            oracle_id = card.get("oracle_id")
+            fallback = fetch_japanese_name_by_oracle_id(oracle_id)
+            if fallback:
+                return fallback
+
+        return " // ".join(names)
+
+    # ---- fallback ----
+    oracle_id = card.get("oracle_id")
+    fallback_name = fetch_japanese_name_by_oracle_id(oracle_id)
+    if fallback_name:
+        return fallback_name
+
+    return card.get("name", "")
 
 
-
-# -------------------------
-# Main processing
-# -------------------------
 def generate_from_txt(
     txt_path: Path,
     out_dir: Path,
@@ -370,7 +515,7 @@ def generate_from_txt(
         else:
             print(f"Image not supported for card: {en}")
 
-        time.sleep(0.1)  # Throttle requests to avoid overloading Scryfall
+        time.sleep(0.2)  # Throttle requests to avoid overloading Scryfall
 
  
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
