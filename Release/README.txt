@@ -1,5 +1,4 @@
-Commander Tool vx.x.x
-
+﻿
 Magic: The Gathering Commander support tool.
 
 This is a Windows-only executable.
@@ -34,3 +33,4 @@ Notes:
 
 Project page:
 https://github.com/yourname/commander-tool
+

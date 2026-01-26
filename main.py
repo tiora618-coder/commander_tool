@@ -47,6 +47,23 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
+import logging
+
+def setup_logging():
+    log_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+    log_file = log_dir / "CommanderTool.log"
+
+    logging.basicConfig(
+        level=logging.INFO,  
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+        ]
+    )
+
+setup_logging()
+
+
 # ==== Configure logging for GUI applications ====
 root = logging.getLogger()
 root.handlers.clear()          # Remove all existing handlers
@@ -54,7 +71,10 @@ root.addHandler(logging.NullHandler())
 root.setLevel(logging.ERROR)   # Use INFO if you want to see informational logs
 
 def excepthook(exc_type, exc, tb):
-    traceback.print_exception(exc_type, exc, tb)
+    logging.critical(
+        "Uncaught exception",
+        exc_info=(exc_type, exc, tb)
+    )
 
 sys.excepthook = excepthook
 
@@ -186,7 +206,7 @@ def ensure_emojis():
         return
 
     try:
-        print("Downloading mana emojis from GitHub...")
+        logging.info("Downloading mana emojis from GitHub...")
         r = requests.get(EMOJI_ZIP_URL, timeout=15)
         r.raise_for_status()
 
@@ -199,7 +219,7 @@ def ensure_emojis():
                     with z.open(member) as src, open(target, "wb") as dst:
                         dst.write(src.read())
 
-        print("Mana emojis downloaded.")
+        logging.info("Mana emojis downloaded.")
 
     except Exception as e:
         QMessageBox.critical(

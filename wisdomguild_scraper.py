@@ -4,6 +4,9 @@ import time
 import urllib.parse
 from bs4 import BeautifulSoup
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # HTTP headers (basic User-Agent to avoid blocking)
 HEADERS = {
@@ -137,25 +140,10 @@ def fetch_text_from_wisdom_guild(card_name_en: str, side=0):
         return ["", ""]
 
     face = faces[side]
-    print("Fetched from Wisdom Guild")
-    print(face["name"])
-    print("\n\n".join(face["texts"]))
+    logger.debug("Fetched from Wisdom Guild")
+    logger.debug(face["name"])
+    logger.debug("\n\n".join(face["texts"]))
     return [
         face["name"],
         "\n\n".join(face["texts"])
     ]
-
-
-# ---- Simple test runner ----
-if __name__ == "__main__":
-    test_cards = [
-        # "Cyclonic Rift",
-        "Sword Coast Serpent",
-        # "Sephiroth, Fabled SOLDIER",
-    ]
-
-    for name in test_cards:
-        print("=" * 40)
-        print(name)
-        [jp_name, jp_txt] = fetch_text_from_wisdom_guild(name, "front")
-        [jp_name, jp_txt] = fetch_text_from_wisdom_guild(name, "back")

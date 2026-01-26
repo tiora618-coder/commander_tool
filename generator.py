@@ -7,7 +7,8 @@ from pathlib import Path
 from requests.exceptions import RequestException, Timeout
 import json
 from wisdomguild_scraper import fetch_text_from_wisdom_guild
-
+import logging
+logger = logging.getLogger(__name__)
 
 SCRYFALL_NAMED_URL = "https://api.scryfall.com/cards/named"
 
@@ -43,7 +44,7 @@ def parse_decklist(path: Path):
 # Scryfall
 # -------------------------
 
-def safe_get(session, url, *, params=None, timeout=5, retries=2, sleep=0.5):
+def safe_get(session, url, *, params=None, timeout=5, retries=2, sleep=1):
     """
     Safe wrapper around requests.get
     Returns None on failure
@@ -54,7 +55,7 @@ def safe_get(session, url, *, params=None, timeout=5, retries=2, sleep=0.5):
             r = session.get(url, params=params, timeout=timeout)
             return r
         except (Timeout, RequestException) as e:
-            print(f"[WARN] GET failed ({attempt+1}/{retries+1}): {url}")
+            logger.warning(f"[WARN] GET failed ({attempt+1}/{retries+1}): {url}")
             if attempt < retries:
                 time.sleep(sleep)
             else:
@@ -161,7 +162,7 @@ def fetch_card(card_name: str, lang: str = "ja"):
             break
 
     if not base:
-        print(f"[WARN] fetch_card failed: {card_name}")
+        logger.warning(f"[WARN] fetch_card failed: {card_name}")
         return None
 
     # --- Prefer Japanese ---
@@ -315,7 +316,7 @@ def get_card_text(card, lang: str = "ja"):
         return "\n\n".join(texts)
 
     jp_txt = fetch_japanese_text_by_oracle_id(oracle_id)
-    print(card_name + ":" + jp_txt)
+    logging.info(card_name + ":" + jp_txt)
     if looks_japanese(jp_txt):
         return jp_txt
     
@@ -535,7 +536,7 @@ def generate_from_txt(
                 progress_callback(i, total, display_name)
 
         else:
-            print(f"Image not supported for card: {en}")
+            logging.info(f"Image not supported for card: {en}")
 
         time.sleep(0.2)  # Throttle requests to avoid overloading Scryfall
 
