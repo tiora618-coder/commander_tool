@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from requests.exceptions import RequestException, Timeout
 import json
+from wisdomguild_scraper import fetch_text_from_wisdom_guild
 
 
 SCRYFALL_NAMED_URL = "https://api.scryfall.com/cards/named"
@@ -315,8 +316,9 @@ def get_card_text(card, lang: str = "ja"):
 
     jp_txt = fetch_japanese_text_by_oracle_id(oracle_id)
     print(card_name + ":" + jp_txt)
-    if jp_txt:
+    if looks_japanese(jp_txt):
         return jp_txt
+    
     return card.get("oracle_text") or ""
 
 
@@ -367,9 +369,16 @@ def get_card_name(card, lang: str = "ja"):
         return card.get("name", "")
 
     # ---- Single-faced ----
-    name = card.get("printed_name")
-    if name and looks_japanese(name):
-        return name
+    if not ("card_faces" in card):
+        name = card.get("printed_name")
+        if name and looks_japanese(name):
+            return name
+        else:
+            en_name = card["name"]
+            [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en_name, "front")
+            if looks_japanese(jp_name):
+                return jp_name
+
 
     # ---- Adventure / MDFC ----
     if "card_faces" in card:
@@ -382,21 +391,18 @@ def get_card_name(card, lang: str = "ja"):
                 names.append(pn)
             else:
                 has_english = True
-                names.append(face.get("name", ""))
 
         if has_english:
-            oracle_id = card.get("oracle_id")
-            fallback = fetch_japanese_name_by_oracle_id(oracle_id)
-            if fallback:
-                return fallback
+            names = []
+            en_name = card["name"]
+            [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en_name, "front")
+            names.append(jp_name)
+            [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en_name, "back")
+            names.append(jp_name)
+        
+        if looks_japanese(" // ".join(names)):
+            return " // ".join(names)
 
-        return " // ".join(names)
-
-    # ---- fallback ----
-    oracle_id = card.get("oracle_id")
-    fallback_name = fetch_japanese_name_by_oracle_id(oracle_id)
-    if fallback_name:
-        return fallback_name
 
     return card.get("name", "")
 
@@ -441,9 +447,14 @@ def generate_from_txt(
             download_image(img_url, out_dir / card_file_front)
 
             card = fetch_card(name,"ja")
-            text_front_ja = get_card_text(card, "ja")
             text_front_en = get_card_text(card, "en")
 
+            text_front_ja = get_card_text(card, "ja")
+            if not looks_japanese(text_front_ja):
+                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+                if looks_japanese(jp_txt):
+                    text_front_ja = jp_txt
+            
             rows.append({
                 "card_file_front": card_file_front,
                 "card_file_back": "",
@@ -485,6 +496,17 @@ def generate_from_txt(
             download_image(face2["image_uris"]["normal"], out_dir / card_file_back)
 
             card = fetch_card(name,"ja")
+
+            text_front_ja = get_card_text(face1, "ja")
+            if not looks_japanese(text_front_ja):
+                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+                if looks_japanese(jp_txt):
+                    text_front_ja = jp_txt
+            text_back_ja = get_card_text(face2, "ja")
+            if not looks_japanese(text_back_ja):
+                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+                if looks_japanese(jp_txt):
+                    text_back_ja = jp_txt
             rows.append({
                 "card_file_front": card_file_front,
                 "card_file_back": card_file_back,
@@ -500,9 +522,9 @@ def generate_from_txt(
                 "mana_cost": card.get("mana_cost", ""),
 
 
-                "text_front_ja": get_card_text(face1, "ja"),
+                "text_front_ja": text_front_ja,
                 "text_front_en": get_card_text(face1, "en"),
-                "text_back_ja": get_card_text(face2, "ja"),
+                "text_back_ja": text_back_ja,
                 "text_back_en": get_card_text(face2, "en"),
             })
 

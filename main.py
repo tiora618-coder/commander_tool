@@ -1051,12 +1051,7 @@ class MainWindow(QWidget):
 
         image_path = self.image_dir / card["card_file_front"]
 
-        card_name = (
-            card["name_ja"]
-            if self.language == "ja"
-            else card["name_en"]
-        )
-
+        card_name = card["name_en"]
         dlg = ImageSelectDialog(card_name, image_path, self)
 
         if dlg.exec_():
