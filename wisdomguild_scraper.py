@@ -33,7 +33,31 @@ MANA_MAP = {
     "緑": "G",
     "◇": "C",
     "Ｘ": "X",
+    "Ｔ": "T", 
+    "Ｑ": "Q", 
 }
+
+SYMBOL_MAP = {
+    # Colors (Japanese)
+    "白": "W",
+    "青": "U",
+    "黒": "B",
+    "赤": "R",
+    "緑": "G",
+
+    # Special mana
+    "◇": "C",
+    "Ｓ": "S",   # Snow mana
+    "Ｐ": "P",   # Phyrexian
+
+    # Other symbols
+    "Ｔ": "T",
+    "Ｑ": "Q",
+    "Ｘ": "X",
+}
+
+
+
 
 # Translation table for full-width digits → half-width digits
 ZENKAKU_DIGITS = str.maketrans(
@@ -44,27 +68,63 @@ ZENKAKU_DIGITS = str.maketrans(
 def convert_mana_symbols(text: str) -> str:
     """
     Convert Wisdom Guild mana notation to MTG-style symbols.
-    Examples:
-      (６)(青) → {6}{U}
-      （赤）   → {R}
-    Supports both full-width and half-width parentheses.
+    Supports:
+      (６)(青)     → {6}{U}
+      (２/Ｕ)      → {2/U}
+      (白/青)      → {W/U}
+      (白/Ｐ)      → {W/P}
+      (Ｓ)         → {S}
+      (Ｔ)         → {T}
     """
+    def normalize(part: str) -> str:
+        part = part.translate(ZENKAKU_DIGITS)
+        return SYMBOL_MAP.get(part, part)
+
     def repl(match: re.Match):
         inner = match.group(1)
 
-        # Convert full-width digits to half-width
-        inner = inner.translate(ZENKAKU_DIGITS)
+        # Hybrid / Phyrexian mana
+        if "/" in inner:
+            parts = inner.split("/")
+            norm = [normalize(p) for p in parts]
+            return "{" + "/".join(norm) + "}"
 
-        if inner in MANA_MAP:
-            return "{" + MANA_MAP[inner] + "}"
-        if inner.isdigit():
+        # Single symbol
+        inner = normalize(inner)
+
+        if inner.isdigit() or inner.isalpha():
             return "{" + inner + "}"
 
-        # Leave unconvertible patterns unchanged
         return match.group(0)
 
-    # Match both full-width （） and half-width ()
     return re.sub(r"[（(]([^）)]+)[）)]", repl, text)
+
+
+
+# def convert_mana_symbols(text: str) -> str:
+#     """
+#     Convert Wisdom Guild mana notation to MTG-style symbols.
+#     Examples:
+#       (６)(青) → {6}{U}
+#       （赤）   → {R}
+#     Supports both full-width and half-width parentheses.
+#     """
+#     def repl(match: re.Match):
+#         inner = match.group(1)
+
+#         # Convert full-width digits to half-width
+#         inner = inner.translate(ZENKAKU_DIGITS)
+
+#         if inner in MANA_MAP:
+#             return "{" + MANA_MAP[inner] + "}"
+#         if inner.isdigit():
+#             return "{" + inner + "}"
+
+#         # Leave unconvertible patterns unchanged
+#         return match.group(0)
+
+#     # Match both full-width （） and half-width ()
+#     return re.sub(r"[（(]([^）)]+)[）)]", repl, text)
 
 
 def fetch_text_from_wisdom_guild(card_name_en: str, side=0):
