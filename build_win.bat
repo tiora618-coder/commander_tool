@@ -48,6 +48,7 @@ echo Building executable...
 pyinstaller ^
  --onefile ^
  --noconsole ^
+ --icon "%ROOT_DIR%icons\commander_tool_icon.ico" ^
  --add-data "weights;weights" ^
  --add-data "C:\Users\Lenovo\Documents\MTG\commander_tool\venv\Lib\site-packages\open_clip;open_clip" ^
  --name "CommanderTool" ^
