@@ -8,13 +8,14 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFileDialog, QTextBrowser, QComboBox,
     QSplitter, QSpinBox, QDialog, QProgressBar, QSizePolicy,
-    QMessageBox, QMenu, QCheckBox
+    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout
 )
-from PyQt5.QtCore import Qt, QUrl, QSize
+from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer
 from PyQt5.QtGui import (
     QTextDocument,
     QPixmap,
     QFont,
+    QFontMetrics,
     QIcon,
     QImage,
     QPalette,
@@ -49,34 +50,72 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 import logging
 
+DEBUG_LOG = True
+
 def setup_logging():
-    log_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+    log_dir = (
+        Path(sys.executable).parent
+        if getattr(sys, "frozen", False)
+        else Path(__file__).parent
+    )
     log_file = log_dir / "CommanderTool.log"
 
+    handlers = [
+        logging.FileHandler(log_file, encoding="utf-8")
+    ]
+
+    if DEBUG_LOG:
+        handlers.append(logging.StreamHandler(sys.stderr))
+
     logging.basicConfig(
-        level=logging.INFO,  
+        level=logging.DEBUG if DEBUG_LOG else logging.ERROR,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-        ]
+        handlers=handlers
     )
+
+    # === excepthook ===
+    def excepthook(exc_type, exc, tb):
+        if DEBUG_LOG:
+            print("=== UNCAUGHT EXCEPTION ===", file=sys.stderr)
+            traceback.print_exception(exc_type, exc, tb)
+        else:
+            logging.critical(
+                "Uncaught exception",
+                exc_info=(exc_type, exc, tb)
+            )
+
+    sys.excepthook = excepthook
 
 setup_logging()
 
+# def setup_logging():
+#     log_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+#     log_file = log_dir / "CommanderTool.log"
 
-# ==== Configure logging for GUI applications ====
-root = logging.getLogger()
-root.handlers.clear()          # Remove all existing handlers
-root.addHandler(logging.NullHandler())
-root.setLevel(logging.ERROR)   # Use INFO if you want to see informational logs
+#     logging.basicConfig(
+#         level=logging.INFO,  
+#         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+#         handlers=[
+#             logging.FileHandler(log_file, encoding="utf-8"),
+#         ]
+#     )
 
-def excepthook(exc_type, exc, tb):
-    logging.critical(
-        "Uncaught exception",
-        exc_info=(exc_type, exc, tb)
-    )
+# setup_logging()
 
-sys.excepthook = excepthook
+
+# # ==== Configure logging for GUI applications ====
+# root = logging.getLogger()
+# root.handlers.clear()          # Remove all existing handlers
+# root.addHandler(logging.NullHandler())
+# root.setLevel(logging.ERROR)   # Use INFO if you want to see informational logs
+
+# def excepthook(exc_type, exc, tb):
+#     logging.critical(
+#         "Uncaught exception",
+#         exc_info=(exc_type, exc, tb)
+#     )
+
+# sys.excepthook = excepthook
 
 # ================= Common Settings =================
 
@@ -467,6 +506,13 @@ class PlayWindow(QWidget):
             QTextBrowser { background:#1a1a1a; color:white; border:none; }
         """)
 
+        self.commander_damage = {
+            1: {"A": 0, "B": 0},
+            2: {"A": 0, "B": 0},
+            3: {"A": 0, "B": 0},
+            4: {"A": 0, "B": 0},
+        }
+        self.counter_popup = None
 
         self.card_title = QTextBrowser()
         self.card_title.setFont(QFont("", 16))
@@ -504,6 +550,11 @@ class PlayWindow(QWidget):
         self.flip_btn.clicked.connect(self.flip)
         self.flip_btn.setEnabled(False)
 
+        self.counter_btn = QPushButton(UI_TEXT[self.language]["commander_counters"])
+        self.counter_btn.setFixedHeight(36)
+        self.counter_btn.clicked.connect(self.toggle_counter_popup)
+
+
         self.player = CounterWidget(UI_TEXT[self.language]["player"], 1, min_value=1, max_value=4)
         self.life = CounterWidget(UI_TEXT[self.language]["life"], 40)
 
@@ -514,6 +565,7 @@ class PlayWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.splitter)
         layout.addWidget(self.flip_btn)
+        layout.addWidget(self.counter_btn)
         layout.addLayout(counters)
 
     def retranslate_ui(self):
@@ -526,6 +578,11 @@ class PlayWindow(QWidget):
 
         self.player.title_label.setText(UI_TEXT[lang]["player"])
         self.life.title_label.setText(UI_TEXT[lang]["life"])
+
+        self.counter_btn.setText(UI_TEXT[lang]["commander_counters"])
+
+        if hasattr(self, "counter_popup"):
+            self.counter_popup.retranslate_ui(lang)
 
 
     def show_card(self, card: dict):
@@ -616,6 +673,19 @@ class PlayWindow(QWidget):
         self.player.reset()
         self.life.reset()
 
+        # ---- commander damage reset ----
+        for p in self.commander_damage:
+            for key in self.commander_damage[p]:
+                self.commander_damage[p][key] = 0
+
+        # ---- extra counters reset ----
+        if self.counter_popup:
+            for c in getattr(self.counter_popup, "extra_counters", {}).values():
+                c.reset()
+
+            if hasattr(self.counter_popup, "refresh"):
+                self.counter_popup.refresh()
+
     def set_text_font_size(self, size):
         self.text_font.setPointSize(size)
         self._update()
@@ -624,8 +694,370 @@ class PlayWindow(QWidget):
         if obj is self.image and event.type() == event.Resize:
             self._update()
         return super().eventFilter(obj, event)
+    
+
+    def toggle_counter_popup(self):
+        # If counter_popup exists and is currently visible, hide it
+        if getattr(self, "counter_popup", None) is not None and self.counter_popup.isVisible():
+            self.counter_popup.hide()
+            return
+
+        # If the popup does not exist yet, create it
+        if getattr(self, "counter_popup", None) is None:
+            self.counter_popup = CounterPopup(self, lang=self.language)
+        else:
+            # Always rebuild rows before showing to match the current player
+            self.counter_popup.rebuild_rows()
+
+        # Match the popup width to the PlayWindow width
+        self.counter_popup.setFixedWidth(self.width())
+
+        # Adjust the popup size to fit its content
+        self.counter_popup.adjustSize()
+
+        # Get the global position of the counter button and map it to the window
+        btn_pos = self.counter_btn.mapToGlobal(QPoint(0, 0))
+        win_pos = self.mapFromGlobal(btn_pos)
+
+        x = 0  # Align the popup to the left of PlayWindow
+        y = win_pos.y() - self.counter_popup.height() - 8  # Position it above the button
+
+        # Move and show the popup
+        self.counter_popup.move(x, y)
+        self.counter_popup.show()
+        self.counter_popup.raise_()
+
+        # Adjust fonts of children after showing the popup (twice for safety)
+        QTimer.singleShot(0, self.counter_popup.adjust_children_fonts)
+        QTimer.singleShot(50, self.counter_popup.adjust_children_fonts)
 
 
+    
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update()
+        if self.counter_popup and self.counter_popup.isVisible():
+            self.counter_popup.hide()  
+
+    
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if self.counter_popup and self.counter_popup.isVisible():
+            self.counter_popup.hide()  
+
+
+class CounterPopup(QFrame):
+    def __init__(self, parent=None, lang="ja"):
+        super().__init__(parent)
+        self.play = parent
+        self.lang = lang
+        self.rows = []
+        self.build_ui()
+
+        # Optional: popup-like appearance
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet("""
+            QFrame {
+                background: #222;
+                border: none;
+            }
+        """)
+
+    def build_ui(self):
+        layout = QVBoxLayout(self)
+
+        # ---- extra counters ----
+        self.build_extra_counters(layout)
+
+        # ---- title ----
+        self.title_label = QLabel()
+        self.title_label.setFont(QFont("", 16, QFont.Bold))
+        layout.addWidget(self.title_label)
+
+        # ---- commander damage ----
+        my_player = self.play.player.value
+        for p in range(1, 5):
+            if p == my_player:
+                continue
+            row = PlayerCommanderRow(p, self.play, self.lang)
+            self.rows.append(row)
+            layout.addWidget(row)
+
+        layout.addStretch()
+        self.retranslate_ui(self.lang)
+
+    def build_extra_counters(self, parent_layout):
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+
+        base = exe_dir() / "icons"  
+
+        self.extra_counters = {
+            "poison": IconCounterWidget(base / "poison.png"),
+            "exp": IconCounterWidget(base / "exp.png"),
+            "energy": IconCounterWidget(base / "energy.png"),
+            "ticket": IconCounterWidget(base / "ticket.png"),
+            "rad": IconCounterWidget(base / "rad.png"),
+        }
+
+        items = list(self.extra_counters.values())
+
+        for i, w in enumerate(items):
+            row = i // 2
+            col = i % 2
+            grid.addWidget(w, row, col)
+
+        frame = QFrame()
+        frame.setLayout(grid)
+        frame.setStyleSheet("background:#1a1a1a; border-radius:6px;")
+        parent_layout.addWidget(frame)
+
+  
+    def rebuild_rows(self):
+        """Rebuild rows according to the current player"""
+        layout = self.layout()
+
+        # Remove old rows
+        for row in self.rows:
+            row.setParent(None)
+        self.rows.clear()
+
+        my_player = self.play.player.value
+
+        for p in range(1, 5):
+            if p == my_player:
+                continue
+            row = PlayerCommanderRow(p, self.play, self.lang)
+            self.rows.append(row)
+            layout.insertWidget(layout.count()-1, row)  # Insert before the stretch
+
+        # Retranslate texts
+        self.retranslate_ui(self.lang)
+    
+    def retranslate_ui(self, lang):
+        self.lang = lang
+        self.title_label.setText(
+            UI_TEXT[lang]["commander_damage"]
+        )
+
+        for row in self.rows:
+            row.retranslate_ui(lang)
+        
+        QTimer.singleShot(0, self.adjust_children_fonts)
+    
+    def adjust_children_fonts(self):
+        for row in self.rows:
+            row.ca.adjust_title_font()
+            row.cb.adjust_title_font()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.adjust_children_fonts)
+        QTimer.singleShot(50, self.adjust_children_fonts)
+    
+
+    def refresh(self):
+        for row in self.rows:
+            row.sync_from_model()
+
+class CommanderDamageCounter(QWidget):
+    valueChanged = pyqtSignal(int)  # delta (+1 / -1)
+
+    def __init__(self, label_text: str, initial=0):
+        super().__init__()
+        self.value = initial
+
+        self.base_font_family = ""
+        self.base_font_weight = QFont.Bold
+        self.max_font_size = 20
+        self.min_font_size = 2
+
+        self.title_label = QLabel(label_text) 
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setFont(QFont("", 16,))
+        self.title_label.setMinimumHeight(28)
+        self.title_label.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed
+        )
+
+        self.value_label = QLabel(str(self.value))
+        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setFont(QFont("", 20, QFont.Bold))
+        self.value_label.setText(str(self.value))
+        self.value_label.setFixedWidth(48)
+
+        up = QPushButton("▲")
+        down = QPushButton("▼")
+        up.clicked.connect(lambda: self.change(1))
+        down.clicked.connect(lambda: self.change(-1))
+
+        btns = QVBoxLayout()
+        btns.addWidget(up)
+        btns.addWidget(down)
+
+        layout = QHBoxLayout(self)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.value_label)
+        layout.addLayout(btns)
+
+    def change(self, delta: int):
+        self.value += delta
+        if self.value < 0:
+            self.value = 0
+            return
+
+        self.value_label.setText(str(self.value))
+        self.valueChanged.emit(delta)
+    
+    def adjust_title_font(self):
+        label = self.title_label
+        text = label.text()
+        if not text:
+            return
+
+        rect = label.contentsRect()
+        max_width = rect.width() - 4
+        max_height = rect.height() - 2
+
+        if max_width <= 0 or max_height <= 0:
+            QTimer.singleShot(0, self.adjust_title_font)
+            return
+
+        for size in range(self.max_font_size, self.min_font_size - 1, -1):
+            font = QFont(self.base_font_family, size, self.base_font_weight)
+            fm = QFontMetrics(font)
+            text_width = fm.horizontalAdvance(text)
+            text_height = fm.height()
+
+            if text_width <= max_width and text_height <= max_height:
+                label.setFont(font)
+                return
+
+        label.setFont(QFont(self.base_font_family, self.min_font_size, self.base_font_weight))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.adjust_title_font()
+
+
+class PlayerCommanderRow(QWidget):
+    def __init__(self, player_no: int, play_window: "PlayWindow", lang="ja"):
+        super().__init__()
+        self.play = play_window
+        self.player_no = player_no
+        self.lang = lang
+
+        self.title_label = QLabel()
+        self.title_label.setAlignment(Qt.AlignLeft)
+        self.title_label.setFont(QFont("", 14, QFont.Bold))
+
+        self.ca_label = QLabel()
+        self.cb_label = QLabel()
+
+        self.ca = CommanderDamageCounter("", self.play.commander_damage[player_no]["A"])
+        self.cb = CommanderDamageCounter("", self.play.commander_damage[player_no]["B"])
+
+        self.ca.valueChanged.connect(lambda d: self.on_damage_changed("A", d))
+        self.cb.valueChanged.connect(lambda d: self.on_damage_changed("B", d))
+
+        row = QHBoxLayout()
+        row.addWidget(self.ca)
+        row.addWidget(self.cb)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.title_label)
+        layout.addLayout(row)
+
+        self.retranslate_ui(lang)
+
+    def on_damage_changed(self, slot: str, delta: int):
+        dmg = self.play.commander_damage[self.player_no][slot]
+        dmg += delta
+        if dmg < 0:
+            dmg = 0
+
+        self.play.commander_damage[self.player_no][slot] = dmg
+
+        # Life adjustment
+        self.play.life.value -= delta
+        self.play.life.value_label.setText(str(self.play.life.value))
+
+    def retranslate_ui(self, lang):
+        self.lang = lang
+        self.title_label.setText(
+            f"{UI_TEXT[lang]['player']} {self.player_no} {UI_TEXT[lang]['commander']}"
+        )
+        self.ca.title_label.setText(" A :")
+        self.cb.title_label.setText(" B :")
+
+        QTimer.singleShot(0, self.ca.adjust_title_font)
+        QTimer.singleShot(0, self.cb.adjust_title_font)
+    
+    def sync_from_model(self):
+        a = self.play.commander_damage[self.player_no]["A"]
+        b = self.play.commander_damage[self.player_no]["B"]
+
+        self.ca.value = a
+        self.ca.value_label.setText(str(a))
+
+        self.cb.value = b
+        self.cb.value_label.setText(str(b))
+
+
+class IconCounterWidget(QWidget):
+    def __init__(self, icon_path: Path, initial=0):
+        super().__init__()
+        self.value = initial
+
+        # icon
+        self.icon = QLabel()
+        pix = QPixmap(str(icon_path))
+        ICON_SIZE = 120
+
+        self.icon.setPixmap(
+            pix.scaled(
+                ICON_SIZE,
+                ICON_SIZE,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+        )
+        self.icon.setFixedSize(ICON_SIZE, ICON_SIZE)
+
+        self.icon.setAlignment(Qt.AlignCenter)
+
+        # value
+        self.value_label = QLabel(str(self.value))
+        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setFont(QFont("", 20, QFont.Bold))
+        self.value_label.setFixedWidth(40)
+
+        # buttons
+        up = QPushButton("▲")
+        down = QPushButton("▼")
+        up.clicked.connect(lambda: self.change(1))
+        down.clicked.connect(lambda: self.change(-1))
+
+        btns = QVBoxLayout()
+        btns.setContentsMargins(0, 0, 0, 0)
+        btns.addWidget(up)
+        btns.addWidget(down)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.addWidget(self.icon)
+        layout.addWidget(self.value_label)
+        layout.addLayout(btns)
+
+    def change(self, delta):
+        self.value = max(0, self.value + delta)
+        self.value_label.setText(str(self.value))
+
+    def reset(self):
+        self.value = 0
+        self.value_label.setText("0")
 
 
 # ================= MainWindow =================
