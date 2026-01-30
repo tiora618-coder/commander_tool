@@ -759,10 +759,12 @@ class CounterPopup(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("""
             QFrame {
-                background: #222;
+                background-color: #000000;
                 border: none;
             }
         """)
+
+
 
     def build_ui(self):
         # --- Create scroll container only once ---
@@ -896,7 +898,19 @@ class CommanderDamageCounter(QWidget):
     def __init__(self, label_text: str, initial=0):
         super().__init__()
         self.value = initial
-
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #000;
+            }
+            QLabel {
+                background-color: #000;
+                color: white;
+            }
+            QPushButton {
+                background-color: #333;
+                color: white;
+            }
+        """)
         self.base_font_family = ""
         self.base_font_weight = QFont.Bold
         self.max_font_size = 20
@@ -932,12 +946,12 @@ class CommanderDamageCounter(QWidget):
         layout.addWidget(self.value_label)
         layout.addLayout(btns)
         self.setMinimumHeight(40)
-        self.setStyleSheet("""
-            QLabel {
-                padding: 0;
-                margin: 0;
-            }
-        """)     
+        # self.setStyleSheet("""
+        #     QLabel {
+        #         padding: 0;
+        #         margin: 0;
+        #     }
+        # """)     
 
     def change(self, delta: int):
         self.value += delta
