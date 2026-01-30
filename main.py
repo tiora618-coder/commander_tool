@@ -839,7 +839,7 @@ class CounterPopup(QFrame):
 
 class CommanderDamageCounter(QWidget):
     valueChanged = pyqtSignal(int)  # delta (+1 / -1)
-
+    
     def __init__(self, label_text: str, initial=0):
         super().__init__()
         self.value = initial
@@ -851,18 +851,14 @@ class CommanderDamageCounter(QWidget):
 
         self.title_label = QLabel(label_text) 
         self.title_label.setAlignment(Qt.AlignCenter)
-        self.title_label.setFont(QFont("", 16,))
-        self.title_label.setMinimumHeight(28)
-        self.title_label.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Fixed
-        )
+        self.title_label.setFont(QFont("", 12,))
+        self.title_label.setMinimumHeight(14)
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
-        self.value_label.setFont(QFont("", 20, QFont.Bold))
-        self.value_label.setText(str(self.value))
-        self.value_label.setFixedWidth(48)
+        self.value_label.setFont(QFont("", 18, QFont.Bold))
+        self.value_label.setFixedWidth(36)
 
         up = QPushButton("▲")
         down = QPushButton("▼")
@@ -870,13 +866,24 @@ class CommanderDamageCounter(QWidget):
         down.clicked.connect(lambda: self.change(-1))
 
         btns = QVBoxLayout()
+        btns.setContentsMargins(0, 0, 0, 0)
+        btns.setSpacing(0)
         btns.addWidget(up)
         btns.addWidget(down)
 
         layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
         layout.addLayout(btns)
+
+        self.setStyleSheet("""
+            QLabel {
+                padding: 0;
+                margin: 0;
+            }
+        """)
 
     def change(self, delta: int):
         self.value += delta
@@ -925,28 +932,43 @@ class PlayerCommanderRow(QWidget):
         self.player_no = player_no
         self.lang = lang
 
+        # --- Remove widget-level padding ---
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setStyleSheet("""
+            QLabel {
+                padding: 0;
+                margin: 0;
+            }
+        """)
+
+        # --- Title label ---
         self.title_label = QLabel()
         self.title_label.setAlignment(Qt.AlignLeft)
-        self.title_label.setFont(QFont("", 14, QFont.Bold))
+        self.title_label.setFont(QFont("", 12, QFont.Bold))
 
-        self.ca_label = QLabel()
-        self.cb_label = QLabel()
-
+        # --- Damage counters ---
         self.ca = CommanderDamageCounter("", self.play.commander_damage[player_no]["A"])
         self.cb = CommanderDamageCounter("", self.play.commander_damage[player_no]["B"])
 
-        self.ca.valueChanged.connect(lambda d: self.on_damage_changed("A", d))
-        self.cb.valueChanged.connect(lambda d: self.on_damage_changed("B", d))
-
+        # --- Horizontal row ---
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
         row.addWidget(self.ca)
         row.addWidget(self.cb)
 
+        # --- Main layout ---
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.title_label)
         layout.addLayout(row)
 
+        # Make the row compact
+        self.setMinimumHeight(18)
+
         self.retranslate_ui(lang)
+
 
     def on_damage_changed(self, slot: str, delta: int):
         dmg = self.play.commander_damage[self.player_no][slot]
