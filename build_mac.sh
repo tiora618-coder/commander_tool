@@ -8,6 +8,9 @@ DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$ROOT_DIR/Release"
 STAGE_DIR="$RELEASE_DIR/_zip_stage"
 
+APP_PATH="$DIST_DIR/$APP_NAME.app"
+PLIST="$APP_PATH/Contents/Info.plist"
+
 MAIN_PY="$ROOT_DIR/main.py"
 MAIN_BAK="$ROOT_DIR/main.bak"
 
@@ -53,16 +56,15 @@ pyinstaller \
   --windowed \
   --noconsole \
   --name "$APP_NAME" \
+  --icon "$ROOT_DIR/icons/commander_tool_icon.icns" \
   --collect-all cv2 \
   --collect-all torch \
   --add-data "weights:weights" \
+  --add-data "$ROOT_DIR/icons:icons" \
   --add-data "venv/lib/python3.11/site-packages/open_clip:open_clip" \
   --clean \
   --noconfirm \
   "$MAIN_PY"
-
-APP_PATH="$DIST_DIR/$APP_NAME.app"
-PLIST="$APP_PATH/Contents/Info.plist"
 
 ########################################
 # 3. Update Info.plist
