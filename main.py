@@ -91,7 +91,16 @@ setup_logging()
 
 
 # ================= Common Settings =================
+def get_app_icon():
+    icon_dir = app_dir() / "icons"
 
+    if platform.system() == "Darwin":
+        # macOS
+        return QIcon(str(icon_dir / "commander_tool_icon.icns"))
+    else:
+        # Windows / Linux → ICO を使うのが安全
+        return QIcon(str(icon_dir / "commander_tool_icon.ico"))
+    
 def set_app_icon(window):
     base = app_dir() / "icons"
 
