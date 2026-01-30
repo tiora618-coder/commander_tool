@@ -839,7 +839,7 @@ class CounterPopup(QFrame):
 
 class CommanderDamageCounter(QWidget):
     valueChanged = pyqtSignal(int)  # delta (+1 / -1)
-    
+
     def __init__(self, label_text: str, initial=0):
         super().__init__()
         self.value = initial
@@ -895,30 +895,31 @@ class CommanderDamageCounter(QWidget):
         self.valueChanged.emit(delta)
     
     def adjust_title_font(self):
-        label = self.title_label
-        text = label.text()
-        if not text:
-            return
+        # label = self.title_label
+        # text = label.text()
+        # if not text:
+        #     return
 
-        rect = label.contentsRect()
-        max_width = rect.width() - 4
-        max_height = rect.height() - 2
+        # rect = label.contentsRect()
+        # max_width = rect.width() - 4
+        # max_height = rect.height() - 2
 
-        if max_width <= 0 or max_height <= 0:
-            QTimer.singleShot(0, self.adjust_title_font)
-            return
+        # if max_width <= 0 or max_height <= 0:
+        #     QTimer.singleShot(0, self.adjust_title_font)
+        #     return
 
-        for size in range(self.max_font_size, self.min_font_size - 1, -1):
-            font = QFont(self.base_font_family, size, self.base_font_weight)
-            fm = QFontMetrics(font)
-            text_width = fm.horizontalAdvance(text)
-            text_height = fm.height()
+        # for size in range(self.max_font_size, self.min_font_size - 1, -1):
+        #     font = QFont(self.base_font_family, size, self.base_font_weight)
+        #     fm = QFontMetrics(font)
+        #     text_width = fm.horizontalAdvance(text)
+        #     text_height = fm.height()
 
-            if text_width <= max_width and text_height <= max_height:
-                label.setFont(font)
-                return
+        #     if text_width <= max_width and text_height <= max_height:
+        #         label.setFont(font)
+        #         return
 
-        label.setFont(QFont(self.base_font_family, self.min_font_size, self.base_font_weight))
+        # label.setFont(QFont(self.base_font_family, self.min_font_size, self.base_font_weight))
+        return
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
