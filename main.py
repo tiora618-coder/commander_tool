@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFileDialog, QTextBrowser, QComboBox,
     QSplitter, QSpinBox, QDialog, QProgressBar, QSizePolicy,
-    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout
+    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea
 )
 from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer
 from PyQt5.QtGui import (
@@ -703,9 +703,7 @@ class PlayWindow(QWidget):
         self.counter_popup.show()
         self.counter_popup.raise_()
 
-        # Adjust fonts of children after showing the popup (twice for safety)
-        QTimer.singleShot(0, self.counter_popup.adjust_children_fonts)
-        QTimer.singleShot(50, self.counter_popup.adjust_children_fonts)
+        self.counter_popup.resize_icon_all()
 
 
     
@@ -740,77 +738,108 @@ class CounterPopup(QFrame):
         """)
 
     def build_ui(self):
-        layout = QVBoxLayout(self)
+        # --- Create scroll container only once ---
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.inner = QWidget()
+        scroll.setWidget(self.inner)
+
+        # Store the inner layout to modify later
+        self.inner_layout = QVBoxLayout(self.inner)
+        self.inner_layout.setContentsMargins(8, 8, 8, 8)
+        self.inner_layout.setSpacing(6)
 
         # ---- extra counters ----
-        self.build_extra_counters(layout)
+        self.build_extra_counters(self.inner_layout)
 
         # ---- title ----
         self.title_label = QLabel()
         self.title_label.setFont(QFont("", 16, QFont.Bold))
-        layout.addWidget(self.title_label)
+        self.inner_layout.addWidget(self.title_label)
 
-        # ---- commander damage ----
+        # ---- commander rows ----
+        self.build_commander_rows()
+
+        # ---- final stretch ----
+        self.inner_layout.addStretch()
+
+        # Add scroll to outer layout
+        outer = QVBoxLayout(self)
+        outer.addWidget(scroll)
+
+        self.retranslate_ui(self.lang)
+
+    def build_commander_rows(self):
+        """Build commander rows inside inner_layout."""
+        self.rows = []
+
         my_player = self.play.player.value
+
         for p in range(1, 5):
             if p == my_player:
                 continue
             row = PlayerCommanderRow(p, self.play, self.lang)
             self.rows.append(row)
-            layout.addWidget(row)
-
-        layout.addStretch()
-        self.retranslate_ui(self.lang)
+            self.inner_layout.addWidget(row)
 
     def build_extra_counters(self, parent_layout):
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
+        base = app_dir() / "icons"
 
-        base = app_dir() / "icons"  
+        # Desired display order (top to bottom)
+        rows = [
+            ["poison", "exp"],
+            ["rad", "energy"],
+            ["ticket"],
+        ]
 
-        self.extra_counters = {
-            "poison": IconCounterWidget(base / "poison.png"),
-            "exp": IconCounterWidget(base / "exp.png"),
-            "energy": IconCounterWidget(base / "energy.png"),
-            "ticket": IconCounterWidget(base / "ticket.png"),
-            "rad": IconCounterWidget(base / "rad.png"),
-        }
-
-        items = list(self.extra_counters.values())
-
-        for i, w in enumerate(items):
-            row = i // 2
-            col = i % 2
-            grid.addWidget(w, row, col)
+        # Create widgets for each counter
+        self.extra_counters = {}
+        for row in rows:
+            for k in row:
+                if k not in self.extra_counters:
+                    self.extra_counters[k] = IconCounterWidget(base / f"{k}.png")
 
         frame = QFrame()
-        frame.setLayout(grid)
         frame.setStyleSheet("background:#1a1a1a; border-radius:6px;")
+
+        vbox = QVBoxLayout(frame)
+        vbox.setContentsMargins(6, 6, 6, 6)
+        vbox.setSpacing(4)
+
+        # --- Push content to the bottom ---
+        vbox.addStretch()
+
+        # --- Build rows from bottom to top ---
+        for row in reversed(rows):
+            h = QHBoxLayout()
+            h.setSpacing(6)
+
+            if len(row) == 1:
+                # Single item row → left aligned
+                h.addWidget(self.extra_counters[row[0]])
+                h.addStretch()  # Add space on the right
+            else:
+                # Two-item row → place side-by-side
+                for k in row:
+                    h.addWidget(self.extra_counters[k])
+
+            vbox.addLayout(h)
+
         parent_layout.addWidget(frame)
 
-  
     def rebuild_rows(self):
-        """Rebuild rows according to the current player"""
-        layout = self.layout()
-
-        # Remove old rows
+        """Rebuild commander rows correctly inside inner_layout."""
+        # Remove old rows from layout
         for row in self.rows:
             row.setParent(None)
-        self.rows.clear()
 
-        my_player = self.play.player.value
+        # Rebuild
+        self.build_commander_rows()
 
-        for p in range(1, 5):
-            if p == my_player:
-                continue
-            row = PlayerCommanderRow(p, self.play, self.lang)
-            self.rows.append(row)
-            layout.insertWidget(layout.count()-1, row)  # Insert before the stretch
-
-        # Retranslate texts
         self.retranslate_ui(self.lang)
-    
+  
     def retranslate_ui(self, lang):
         self.lang = lang
         self.title_label.setText(
@@ -820,18 +849,15 @@ class CounterPopup(QFrame):
         for row in self.rows:
             row.retranslate_ui(lang)
         
-        QTimer.singleShot(0, self.adjust_children_fonts)
-    
-    def adjust_children_fonts(self):
-        for row in self.rows:
-            row.ca.adjust_title_font()
-            row.cb.adjust_title_font()
+    def resize_icon_all(self):
+        """Force all extra counters to resize their icons."""
+        for w in self.extra_counters.values():
+            w.resize_icon()
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(0, self.adjust_children_fonts)
-        QTimer.singleShot(50, self.adjust_children_fonts)
-    
+        for w in self.extra_counters.values():
+            w.resize_icon()
 
     def refresh(self):
         for row in self.rows:
@@ -852,13 +878,14 @@ class CommanderDamageCounter(QWidget):
         self.title_label = QLabel(label_text) 
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setFont(QFont("", 12,))
-        self.title_label.setMinimumHeight(14)
-        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.title_label.setMinimumHeight(40)
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+
 
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
         self.value_label.setFont(QFont("", 18, QFont.Bold))
-        self.value_label.setFixedWidth(36)
+        self.value_label.setFixedWidth(40)
 
         up = QPushButton("▲")
         down = QPushButton("▼")
@@ -877,13 +904,13 @@ class CommanderDamageCounter(QWidget):
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
         layout.addLayout(btns)
-
+        self.setMinimumHeight(40)
         self.setStyleSheet("""
             QLabel {
                 padding: 0;
                 margin: 0;
             }
-        """)
+        """)     
 
     def change(self, delta: int):
         self.value += delta
@@ -894,37 +921,6 @@ class CommanderDamageCounter(QWidget):
         self.value_label.setText(str(self.value))
         self.valueChanged.emit(delta)
     
-    def adjust_title_font(self):
-        # label = self.title_label
-        # text = label.text()
-        # if not text:
-        #     return
-
-        # rect = label.contentsRect()
-        # max_width = rect.width() - 4
-        # max_height = rect.height() - 2
-
-        # if max_width <= 0 or max_height <= 0:
-        #     QTimer.singleShot(0, self.adjust_title_font)
-        #     return
-
-        # for size in range(self.max_font_size, self.min_font_size - 1, -1):
-        #     font = QFont(self.base_font_family, size, self.base_font_weight)
-        #     fm = QFontMetrics(font)
-        #     text_width = fm.horizontalAdvance(text)
-        #     text_height = fm.height()
-
-        #     if text_width <= max_width and text_height <= max_height:
-        #         label.setFont(font)
-        #         return
-
-        # label.setFont(QFont(self.base_font_family, self.min_font_size, self.base_font_weight))
-        return
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.adjust_title_font()
-
 
 class PlayerCommanderRow(QWidget):
     def __init__(self, player_no: int, play_window: "PlayWindow", lang="ja"):
@@ -945,11 +941,14 @@ class PlayerCommanderRow(QWidget):
         # --- Title label ---
         self.title_label = QLabel()
         self.title_label.setAlignment(Qt.AlignLeft)
-        self.title_label.setFont(QFont("", 12, QFont.Bold))
+        self.title_label.setFont(QFont("", 14, QFont.Bold))
 
         # --- Damage counters ---
         self.ca = CommanderDamageCounter("", self.play.commander_damage[player_no]["A"])
         self.cb = CommanderDamageCounter("", self.play.commander_damage[player_no]["B"])
+
+        self.ca.valueChanged.connect(lambda d: self.on_damage_changed("A", d))
+        self.cb.valueChanged.connect(lambda d: self.on_damage_changed("B", d))
 
         # --- Horizontal row ---
         row = QHBoxLayout()
@@ -966,7 +965,7 @@ class PlayerCommanderRow(QWidget):
         layout.addLayout(row)
 
         # Make the row compact
-        self.setMinimumHeight(18)
+        self.setMinimumHeight(80)
 
         self.retranslate_ui(lang)
 
@@ -990,9 +989,9 @@ class PlayerCommanderRow(QWidget):
         )
         self.ca.title_label.setText(" A :")
         self.cb.title_label.setText(" B :")
+        self.ca.title_label.setFixedHeight(50)
+        self.cb.title_label.setFixedHeight(50)
 
-        QTimer.singleShot(0, self.ca.adjust_title_font)
-        QTimer.singleShot(0, self.cb.adjust_title_font)
     
     def sync_from_model(self):
         a = self.play.commander_damage[self.player_no]["A"]
@@ -1009,31 +1008,16 @@ class IconCounterWidget(QWidget):
     def __init__(self, icon_path: Path, initial=0):
         super().__init__()
         self.value = initial
+        self.icon_path = icon_path
 
-        # icon
         self.icon = QLabel()
-        pix = QPixmap(str(icon_path))
-        ICON_SIZE = 120
-
-        self.icon.setPixmap(
-            pix.scaled(
-                ICON_SIZE,
-                ICON_SIZE,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-        )
-        self.icon.setFixedSize(ICON_SIZE, ICON_SIZE)
-
         self.icon.setAlignment(Qt.AlignCenter)
 
-        # value
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
         self.value_label.setFont(QFont("", 20, QFont.Bold))
         self.value_label.setFixedWidth(40)
 
-        # buttons
         up = QPushButton("▲")
         down = QPushButton("▼")
         up.clicked.connect(lambda: self.change(1))
@@ -1049,6 +1033,27 @@ class IconCounterWidget(QWidget):
         layout.addWidget(self.icon)
         layout.addWidget(self.value_label)
         layout.addLayout(btns)
+
+        self.resize_icon()
+
+    def resize_icon(self):
+        """Resize the icon dynamically based on widget width"""
+        if not self.icon_path.exists():
+            return
+
+        pix = QPixmap(str(self.icon_path))
+        w = max(120, int(self.width() * 0.25))
+        pix = pix.scaled(
+            w, w,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.icon.setPixmap(pix)
+        self.icon.setFixedSize(w, w)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.resize_icon()
 
     def change(self, delta):
         self.value = max(0, self.value + delta)
