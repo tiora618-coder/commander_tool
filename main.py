@@ -1,4 +1,4 @@
-# main.py
+﻿# main.py
 import sys
 import csv
 from pathlib import Path
@@ -36,6 +36,7 @@ APP_VERSION = "1.0.2"
 
 import os
 import logging
+import platform
 
 # ==== Safeguard for stdout / stderr ====
 if sys.stdout is None:
@@ -90,6 +91,23 @@ setup_logging()
 
 
 # ================= Common Settings =================
+
+def set_app_icon(window):
+    base = app_dir() / "icons"
+
+    # Select appropriate icon depending on OS
+    if platform.system() == "Windows":
+        # Use .ico for Windows (affects taskbar icon)
+        icon_file = base / "commander_tool_icon.ico"
+    elif platform.system() == "Darwin":
+        # Use .icns for macOS (Dock will automatically use this icon)
+        icon_file = base / "commander_tool_icon_mac.icns"
+    else:
+        # Fallback for Linux or others
+        icon_file = base / "commander_tool_icon.png"
+
+    # Set window icon (Windows taskbar uses this)
+    window.setWindowIcon(QIcon(str(icon_file)))
 
 UI_FONT_SIZE = 18
 
@@ -1069,6 +1087,7 @@ class IconCounterWidget(QWidget):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+        set_app_icon(self)
         self.setWindowTitle(f"Commander Tool (v{APP_VERSION}) - Main Window -")
         self.resize(820, 620)
 
@@ -1829,7 +1848,6 @@ class ImageLoader(QRunnable):
 
 
 # ================= Entry =================
-
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support() 
@@ -1837,6 +1855,13 @@ if __name__ == "__main__":
     QApplication.setAttribute(Qt.AA_Use96Dpi, True)
     app = QApplication(sys.argv)
     ensure_emojis()
+
+    # Set application-wide icon (affects Dock, taskbar, Alt+Tab)
+    app_icon = QIcon(str(app_dir() / "icons" / "commander_tool_icon.ico"))
+    QApplication.setWindowIcon(app_icon)
+
+    # Main window
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())
+
