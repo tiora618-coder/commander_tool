@@ -88,34 +88,6 @@ def setup_logging():
 
 setup_logging()
 
-# def setup_logging():
-#     log_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
-#     log_file = log_dir / "CommanderTool.log"
-
-#     logging.basicConfig(
-#         level=logging.INFO,  
-#         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-#         handlers=[
-#             logging.FileHandler(log_file, encoding="utf-8"),
-#         ]
-#     )
-
-# setup_logging()
-
-
-# # ==== Configure logging for GUI applications ====
-# root = logging.getLogger()
-# root.handlers.clear()          # Remove all existing handlers
-# root.addHandler(logging.NullHandler())
-# root.setLevel(logging.ERROR)   # Use INFO if you want to see informational logs
-
-# def excepthook(exc_type, exc, tb):
-#     logging.critical(
-#         "Uncaught exception",
-#         exc_info=(exc_type, exc, tb)
-#     )
-
-# sys.excepthook = excepthook
 
 # ================= Common Settings =================
 
@@ -147,12 +119,16 @@ def enable_dark_mode(app: QApplication):
     app.setPalette(palette)
 
 def app_dir() -> Path:
-    if getattr(sys, 'frozen', False):
-        # When running via PyInstaller
+    # One-file: use the temporary MEIPASS directory
+    if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)
-    else:
-        # When running normally with Python
-        return Path(__file__).resolve().parent
+
+    # One-folder: use the folder containing the executable
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+
+    # Normal Python execution
+    return Path(__file__).resolve().parent
 
 
 def exe_dir() -> Path:
@@ -791,7 +767,7 @@ class CounterPopup(QFrame):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
 
-        base = exe_dir() / "icons"  
+        base = app_dir() / "icons"  
 
         self.extra_counters = {
             "poison": IconCounterWidget(base / "poison.png"),
