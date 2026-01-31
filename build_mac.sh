@@ -14,6 +14,8 @@ PLIST="$APP_PATH/Contents/Info.plist"
 MAIN_PY="$ROOT_DIR/main.py"
 MAIN_BAK="$ROOT_DIR/main.bak"
 
+CONFIG_PY="$ROOT_DIR/config.py"
+
 README_SRC="$RELEASE_DIR/README.txt"
 README_TMP="$STAGE_DIR/README.txt"
 
@@ -32,12 +34,12 @@ mv "$MAIN_PY.tmp" "$MAIN_PY"
 echo "DEBUG_LOG disabled."
 
 ########################################
-# 1. Get version
+# 1. Get version (from config.py)
 ########################################
-APP_VERSION=$(grep -E '^APP_VERSION *= *"' "$MAIN_PY" | sed -E 's/.*"([^"]+)".*/\1/')
+APP_VERSION=$(grep -E '^APP_VERSION *= *"' "$CONFIG_PY" | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ -z "$APP_VERSION" ]; then
-  echo "ERROR: APP_VERSION not found"
+  echo "ERROR: APP_VERSION not found in config.py"
   exit 1
 fi
 
