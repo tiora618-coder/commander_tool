@@ -326,7 +326,7 @@ class PlayWindow(QWidget):
             self.counter_popup.rebuild_rows()
 
         # Get the inner content height
-        inner_height = self.counter_popup.inner.sizeHint().height()
+        inner_height = self.counter_popup.inner.sizeHint().height() + 20
 
         # Calculate remaining space in the window
         window_height = self.height()
