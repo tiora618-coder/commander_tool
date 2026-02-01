@@ -325,11 +325,22 @@ class PlayWindow(QWidget):
             # Always rebuild rows before showing to match the current player
             self.counter_popup.rebuild_rows()
 
-        # Match the popup width to the PlayWindow width
-        self.counter_popup.setFixedWidth(self.width())
+        # Get the inner content height
+        inner_height = self.counter_popup.inner.sizeHint().height()
 
-        # Adjust the popup size to fit its content
-        self.counter_popup.adjustSize()
+        # Calculate remaining space in the window
+        window_height = self.height()
+        flip_btn_height = self.flip_btn.height()
+        counter_btn_height = self.counter_btn.height()
+        counters_height = self.player.height()
+
+        available_height = window_height - flip_btn_height - counter_btn_height - counters_height - 16  # add a little margin
+
+        # Set the popup height
+        # It will be the smaller of the content height or the available window space
+        popup_height = min(inner_height, available_height)
+        self.counter_popup.setFixedHeight(popup_height)
+        self.counter_popup.setFixedWidth(self.width())
 
         # Get the global position of the counter button and map it to the window
         btn_pos = self.counter_btn.mapToGlobal(QPoint(0, 0))
@@ -390,7 +401,7 @@ class CounterPopup(QFrame):
 
         # Store the inner layout to modify later
         self.inner_layout = QVBoxLayout(self.inner)
-        self.inner_layout.setContentsMargins(8, 8, 8, 8)
+        self.inner_layout.setContentsMargins(4, 4, 4, 4)
         self.inner_layout.setSpacing(6)
 
         # ---- extra counters ----
@@ -399,7 +410,13 @@ class CounterPopup(QFrame):
         # ---- title ----
         self.title_label = QLabel()
         self.title_label.setFont(QFont("", 16, QFont.Bold))
+        self.title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)  
+        self.title_label.setWordWrap(True)  
+        self.title_label.setContentsMargins(4, 4, 4, 4)  
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.title_label.setMinimumHeight(50)  
         self.inner_layout.addWidget(self.title_label)
+
 
         # ---- commander rows ----
         self.build_commander_rows()
@@ -524,8 +541,12 @@ class PlayerCommanderRow(QWidget):
 
         # --- Title label ---
         self.title_label = QLabel()
-        self.title_label.setAlignment(Qt.AlignLeft)
-        self.title_label.setFont(QFont("", 14, QFont.Bold))
+        self.title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.title_label.setWordWrap(True)
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.title_label.setMinimumHeight(60)  
+        self.title_label.setContentsMargins(4, 4, 4, 4)  
+        self.title_label.setFont(QFont("", 14, QFont.Bold))  
 
         # --- Damage counters ---
         self.ca = CommanderDamageCounter("", self.play.commander_damage[player_no]["A"])
@@ -536,20 +557,17 @@ class PlayerCommanderRow(QWidget):
 
         # --- Horizontal row ---
         row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
+        row.setContentsMargins(4, 0, 4, 0)
+        row.setSpacing(4)
         row.addWidget(self.ca)
         row.addWidget(self.cb)
 
         # --- Main layout ---
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
         layout.addWidget(self.title_label)
         layout.addLayout(row)
-
-        # Make the row compact
-        self.setMinimumHeight(80)
 
         self.retranslate_ui(lang)
 
@@ -571,11 +589,11 @@ class PlayerCommanderRow(QWidget):
         self.title_label.setText(
             f"{UI_TEXT[lang]['player']} {self.player_no} {UI_TEXT[lang]['commander']}"
         )
+        self.title_label.setMinimumHeight(50)
         self.ca.title_label.setText(" A :")
         self.cb.title_label.setText(" B :")
-        self.ca.title_label.setFixedHeight(50)
-        self.cb.title_label.setFixedHeight(50)
-
+        self.ca.title_label.setFont(QFont("", 14, QFont.Bold))  
+        self.cb.title_label.setFont(QFont("", 14, QFont.Bold))  
     
     def sync_from_model(self):
         a = self.play.commander_damage[self.player_no]["A"]
@@ -718,17 +736,16 @@ class CommanderDamageCounter(QWidget):
         self.max_font_size = 20
         self.min_font_size = 2
 
-        self.title_label = QLabel(label_text) 
-        self.title_label.setAlignment(Qt.AlignCenter)
-        self.title_label.setFont(QFont("", 12,))
-        self.title_label.setMinimumHeight(40)
+        self.title_label = QLabel(label_text)
+        self.title_label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.title_label.setWordWrap(True)
         self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
-
+        self.title_label.setMinimumHeight(50) 
 
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
         self.value_label.setFont(QFont("", 18, QFont.Bold))
-        self.value_label.setFixedWidth(40)
+        self.value_label.setMinimumWidth(40)
 
         up = QPushButton("▲")
         down = QPushButton("▼")
@@ -742,12 +759,12 @@ class CommanderDamageCounter(QWidget):
         btns.addWidget(down)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(6, 0, 6, 0)
+        layout.setSpacing(8)
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
         layout.addLayout(btns)
-        self.setMinimumHeight(40)
+        self.setMinimumHeight(50)
 
 
     def change(self, delta: int):
