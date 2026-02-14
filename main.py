@@ -35,6 +35,8 @@ from play_window import PlayWindow
 from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
 from common_func import strip_ruby, mana_symbol_to_filename, app_dir, exe_dir
 
+import mulligan_simulator
+
 import os
 import logging
 import platform
@@ -372,6 +374,18 @@ class MainWindow(QWidget):
         self.reset_btn = QPushButton(UI_TEXT[self.language]["reset"])
         self.reset_btn.clicked.connect(self.reset_counters)
 
+        self.mulligan_btn = QPushButton(UI_TEXT[self.language]["mulligan_simulator"])
+        self.mulligan_btn.clicked.connect(self.launch_mulligan_simulator)
+        self.mulligan_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3d3d3d;
+                color: #ffaa00;
+                font-weight: bold;
+                border: 1px solid #ffaa00;
+            }
+            QPushButton:hover { background-color: #4d4d4d; }
+        """)
+
         self.btn_txt = QPushButton(UI_TEXT[self.language]["generate_fm_txt"])
         self.btn_csv = QPushButton(UI_TEXT[self.language]["load_csv"])
         self.btn_txt.clicked.connect(self.generate_from_txt)
@@ -399,6 +413,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.btn_txt)
         layout.addWidget(self.btn_csv)
         layout.addWidget(self.reset_btn)
+        layout.addWidget(self.mulligan_btn)
         layout.addSpacing(20)
         layout.addWidget(self.font_size_label)
         layout.addWidget(self.font_size)
@@ -419,6 +434,7 @@ class MainWindow(QWidget):
         self.btn_csv.setText(UI_TEXT[self.language]["load_csv"])
         self.camera_chk.setText(UI_TEXT[lang]["camera_mode"])
         self.reset_btn.setText(UI_TEXT[lang]["reset"])
+        self.mulligan_btn.setText(UI_TEXT[lang]["mulligan_simulator"])
         self.commander_a_btn.setText(UI_TEXT[lang]["commander_a"])
         self.commander_b_btn.setText(UI_TEXT[lang]["commander_b"])
         self.companion_btn.setText(UI_TEXT[lang]["companion"])
@@ -746,6 +762,25 @@ class MainWindow(QWidget):
 
     def reset_counters(self):
         self.play.reset_counters()
+
+    def launch_mulligan_simulator(self):
+        if not self.csv_path:
+            QMessageBox.warning(
+                self,
+                "CSV Loader",
+                UI_TEXT[self.language]["csv_not_loaded"]
+            )
+            return
+
+        # StartWindow will automatically trigger loading because we pass csv_path
+        self.sim_start_window = mulligan_simulator.StartWindow(initial_csv=self.csv_path)
+        # Use initial_csv's language if possible, otherwise it defaults to JA in StartWindow.__init__
+        # For now, it will use StartWindow's default (JA). 
+        # But we can sync it:
+        self.sim_start_window.language = self.language
+        self.sim_start_window.change_language() 
+        
+        self.sim_start_window.show()
 
     def open_image_selector(self, item):
         idx = self.filtered_indices[self.list.row(item)]
@@ -1079,7 +1114,8 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support() 
 
-    QApplication.setAttribute(Qt.AA_Use96Dpi, True)
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
     ensure_emojis()
 
