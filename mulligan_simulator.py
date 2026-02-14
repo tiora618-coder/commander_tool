@@ -41,7 +41,14 @@ class StartWindow(QWidget):
             QComboBox, QSpinBox, QLineEdit { color: #ffffff; background: #2b2b2b; }
             QComboBox QAbstractItemView { color: #ffffff; background: #2b2b2b; }
             QMenu { color: #ffffff; background: #2b2b2b; }
-            QToolTip { color: #ffffff; background: #333333; }
+            QToolTip { 
+                color: #ffffff; 
+                background: #333333; 
+                border: 1px solid #777777;
+                padding: 4px;
+                font-family: 'Meiryo UI';
+                font-size: 13px;
+            }
         """)
 
         # ===============================
@@ -971,6 +978,10 @@ def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
+    
+    # Use modern font
+    app.setFont(QFont("Meiryo UI", 10))
+    
     w = StartWindow()
     w.show()
     sys.exit(app.exec_())

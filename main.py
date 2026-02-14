@@ -1117,6 +1117,11 @@ if __name__ == "__main__":
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
+    
+    # Set modern font for DPI-awareness and to prevent DirectWrite errors
+    default_font = QFont("Meiryo UI", 10)
+    app.setFont(default_font)
+
     ensure_emojis()
 
     # Set application-wide icon (affects Dock, taskbar, Alt+Tab)
