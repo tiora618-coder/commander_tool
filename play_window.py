@@ -6,12 +6,14 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QTextBrowser, QSplitter, QSizePolicy, QFrame, QScrollArea
 )
-from PyQt5.QtCore import Qt, QPoint, QUrl
+from PyQt5.QtCore import Qt, QPoint, QUrl, QTimer, QDateTime
 from PyQt5.QtGui import (
     QTextDocument, QPixmap, QFont    
 )
 from PyQt5.QtCore import pyqtSignal
 import re
+import collections
+from datetime import datetime
 
 PHYREXIAN_MAP = {
     "(W/P)": "{W/P}",
@@ -118,8 +120,8 @@ class PlayWindow(QWidget):
         self.resize(560, 900)
 
         self.setStyleSheet("""
-            QWidget { background:#111; color:white; }
-            QTextBrowser { background:#1a1a1a; color:white; border:none; }
+            QWidget { background:#111; color:white; font-family: 'Meiryo UI'; }
+            QTextBrowser { background:#1a1a1a; color:white; border:none; font-family: 'Meiryo UI'; }
         """)
 
         self.commander_damage = {
@@ -130,8 +132,17 @@ class PlayWindow(QWidget):
         }
         self.counter_popup = None
 
+        # ---- Event Log ----
+        self.event_log = []
+        self.pending_deltas = collections.defaultdict(int)
+        self.log_timer = QTimer(self)
+        self.log_timer.setSingleShot(True)
+        self.log_timer.setInterval(5000)
+        self.log_timer.timeout.connect(self.commit_log)
+        self.log_popup = None
+
         self.card_title = QTextBrowser()
-        self.card_title.setFont(QFont("", 16))
+        self.card_title.setFont(QFont("Meiryo UI", 16))
         self.card_title.setStyleSheet("background:#1a1a1a; color:white; border:none;")
         self.card_title.setMaximumHeight(40)  
         self.card_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -146,7 +157,7 @@ class PlayWindow(QWidget):
 
         self.text = QTextBrowser()
         self.text.setAlignment(Qt.AlignLeft)
-        self.text_font = QFont("", 14)
+        self.text_font = QFont("Meiryo UI", 14)
         self.text.setFont(self.text_font)
 
         self.text.document().setDefaultStyleSheet("""
@@ -173,6 +184,11 @@ class PlayWindow(QWidget):
 
         self.player = CounterWidget(UI_TEXT[self.language]["player"], 1, min_value=1, max_value=4)
         self.life = CounterWidget(UI_TEXT[self.language]["life"], 40)
+        self.life.valueChanged.connect(lambda d: self.on_value_changed("life", d))
+
+        self.log_btn = QPushButton(UI_TEXT[self.language]["event_log"])
+        self.log_btn.setFixedHeight(36)
+        self.log_btn.clicked.connect(self.toggle_log_popup)
 
         counters = QHBoxLayout()
         counters.addWidget(self.player)
@@ -182,6 +198,7 @@ class PlayWindow(QWidget):
         layout.addWidget(self.splitter)
         layout.addWidget(self.flip_btn)
         layout.addWidget(self.counter_btn)
+        layout.addWidget(self.log_btn)
         layout.addLayout(counters)
 
     def retranslate_ui(self):
@@ -196,9 +213,13 @@ class PlayWindow(QWidget):
         self.life.title_label.setText(UI_TEXT[lang]["life"])
 
         self.counter_btn.setText(UI_TEXT[lang]["commander_counters"])
+        self.log_btn.setText(UI_TEXT[lang]["event_log"])
 
-        if hasattr(self, "counter_popup"):
+        if hasattr(self, "counter_popup") and self.counter_popup:
             self.counter_popup.retranslate_ui(lang)
+
+        if hasattr(self, "log_popup") and self.log_popup:
+            self.log_popup.refresh()
 
 
     def show_card(self, card: dict):
@@ -302,6 +323,13 @@ class PlayWindow(QWidget):
             if hasattr(self.counter_popup, "refresh"):
                 self.counter_popup.refresh()
 
+        # ---- clear event log ----
+        self.event_log = []
+        self.pending_deltas.clear()
+        self.log_timer.stop()
+        if self.log_popup:
+            self.log_popup.hide()
+
     def set_text_font_size(self, size):
         self.text_font.setPointSize(size)
         self._update()
@@ -318,6 +346,9 @@ class PlayWindow(QWidget):
             self.counter_popup.hide()
             return
 
+        if self.log_popup and self.log_popup.isVisible():
+            self.log_popup.hide()
+
         # If the popup does not exist yet, create it
         if getattr(self, "counter_popup", None) is None:
             self.counter_popup = CounterPopup(self, lang=self.language)
@@ -332,12 +363,12 @@ class PlayWindow(QWidget):
         window_height = self.height()
         flip_btn_height = self.flip_btn.height()
         counter_btn_height = self.counter_btn.height()
+        log_btn_height = self.log_btn.height()
         counters_height = self.player.height()
 
-        available_height = window_height - flip_btn_height - counter_btn_height - counters_height - 16  # add a little margin
+        available_height = window_height - flip_btn_height - counter_btn_height - log_btn_height - counters_height - 24 
 
         # Set the popup height
-        # It will be the smaller of the content height or the available window space
         popup_height = min(inner_height, available_height)
         self.counter_popup.setFixedHeight(popup_height)
         self.counter_popup.setFixedWidth(self.width())
@@ -356,6 +387,81 @@ class PlayWindow(QWidget):
 
         self.counter_popup.resize_icon_all()
 
+    def toggle_log_popup(self):
+        if self.log_popup and self.log_popup.isVisible():
+            self.log_popup.hide()
+            return
+
+        if self.counter_popup and self.counter_popup.isVisible():
+            self.counter_popup.hide()
+
+        if not self.log_popup:
+            self.log_popup = EventLogPopup(self, lang=self.language)
+        
+        self.log_popup.refresh()
+
+        inner_height = self.log_popup.inner.sizeHint().height() + 20
+        window_height = self.height()
+        flip_btn_height = self.flip_btn.height()
+        counter_btn_height = self.counter_btn.height()
+        log_btn_height = self.log_btn.height()
+        counters_height = self.player.height()
+
+        available_height = window_height - flip_btn_height - counter_btn_height - log_btn_height - counters_height - 24
+        popup_height = min(inner_height, available_height)
+        if popup_height < 100: popup_height = 100
+
+        self.log_popup.setFixedHeight(popup_height)
+        self.log_popup.setFixedWidth(self.width())
+
+        btn_pos = self.log_btn.mapToGlobal(QPoint(0, 0))
+        win_pos = self.mapFromGlobal(btn_pos)
+
+        x = 0
+        y = win_pos.y() - self.log_popup.height() - 8
+
+        self.log_popup.move(x, y)
+        self.log_popup.show()
+        self.log_popup.raise_()
+
+    def on_value_changed(self, key, delta):
+        self.pending_deltas[key] += delta
+        self.log_timer.start() # Restart timer
+
+    def commit_log(self):
+        now = datetime.now()
+        
+        # Committing commander damage
+        for p in range(1, 5):
+            for slot in ["A", "B"]:
+                key = f"dmg_{p}_{slot}"
+                delta = self.pending_deltas.pop(key, 0)
+                if delta != 0:
+                    self.event_log.append({
+                        "type": "dmg", "p": p, "slot": slot, "delta": delta, "time": now
+                    })
+
+        # Life
+        life_delta = self.pending_deltas.pop("life", 0)
+        if life_delta != 0:
+            self.event_log.append({
+                "type": "life", "delta": life_delta, "time": now
+            })
+
+        # Extra counters
+        keys = list(self.pending_deltas.keys())
+        for key in keys:
+            if key.startswith("counter_"):
+                name = key.replace("counter_", "")
+                delta = self.pending_deltas.pop(key, 0)
+                if delta != 0:
+                    self.event_log.append({
+                        "type": "counter", "name": name, "delta": delta, "time": now, "icon": name
+                    })
+        
+        if self.log_popup and self.log_popup.isVisible():
+            self.log_popup.refresh()
+
 
     
     def resizeEvent(self, event):
@@ -363,12 +469,16 @@ class PlayWindow(QWidget):
         self._update()
         if self.counter_popup and self.counter_popup.isVisible():
             self.counter_popup.hide()  
+        if self.log_popup and self.log_popup.isVisible():
+            self.log_popup.hide()
 
     
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         if self.counter_popup and self.counter_popup.isVisible():
             self.counter_popup.hide()  
+        if self.log_popup and self.log_popup.isVisible():
+            self.log_popup.hide()
 
 
 class CounterPopup(QFrame):
@@ -409,7 +519,7 @@ class CounterPopup(QFrame):
 
         # ---- title ----
         self.title_label = QLabel()
-        self.title_label.setFont(QFont("", 16, QFont.Bold))
+        self.title_label.setFont(QFont("Meiryo UI", 16, QFont.Bold))
         self.title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)  
         self.title_label.setWordWrap(True)  
         self.title_label.setContentsMargins(4, 4, 4, 4)  
@@ -458,7 +568,10 @@ class CounterPopup(QFrame):
         for row in rows:
             for k in row:
                 if k not in self.extra_counters:
-                    self.extra_counters[k] = IconCounterWidget(base / f"{k}.png")
+                    ec = IconCounterWidget(base / f"{k}.png")
+                    # Connect signal to log
+                    ec.valueChanged.connect(lambda d, key=k: self.play.on_value_changed(f"counter_{key}", d))
+                    self.extra_counters[k] = ec
 
         frame = QFrame()
         frame.setStyleSheet("background:#1a1a1a; border-radius:6px;")
@@ -546,7 +659,7 @@ class PlayerCommanderRow(QWidget):
         self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.title_label.setMinimumHeight(60)  
         self.title_label.setContentsMargins(4, 4, 4, 4)  
-        self.title_label.setFont(QFont("", 14, QFont.Bold))  
+        self.title_label.setFont(QFont("Meiryo UI", 14, QFont.Bold))  
 
         # --- Damage counters ---
         self.ca = CommanderDamageCounter("", self.play.commander_damage[player_no]["A"])
@@ -574,6 +687,11 @@ class PlayerCommanderRow(QWidget):
 
     def on_damage_changed(self, slot: str, delta: int):
         dmg = self.play.commander_damage[self.player_no][slot]
+        actual_delta = delta # Basic delta is 1 or -1
+        
+        if dmg == 0 and delta < 0:
+            return # no change if already 0
+
         dmg += delta
         if dmg < 0:
             dmg = 0
@@ -584,6 +702,10 @@ class PlayerCommanderRow(QWidget):
         self.play.life.value -= delta
         self.play.life.value_label.setText(str(self.play.life.value))
 
+        # Log
+        self.play.on_value_changed(f"dmg_{self.player_no}_{slot}", delta)
+        self.play.on_value_changed("life", -delta)
+
     def retranslate_ui(self, lang):
         self.lang = lang
         self.title_label.setText(
@@ -592,8 +714,8 @@ class PlayerCommanderRow(QWidget):
         self.title_label.setMinimumHeight(50)
         self.ca.title_label.setText(" A :")
         self.cb.title_label.setText(" B :")
-        self.ca.title_label.setFont(QFont("", 14, QFont.Bold))  
-        self.cb.title_label.setFont(QFont("", 14, QFont.Bold))  
+        self.ca.title_label.setFont(QFont("Meiryo UI", 14, QFont.Bold))  
+        self.cb.title_label.setFont(QFont("Meiryo UI", 14, QFont.Bold))  
     
     def sync_from_model(self):
         a = self.play.commander_damage[self.player_no]["A"]
@@ -605,9 +727,119 @@ class PlayerCommanderRow(QWidget):
         self.cb.value = b
         self.cb.value_label.setText(str(b))
 
+# ================= Event Log Popup =================
+
+class EventLogPopup(QFrame):
+    def __init__(self, parent=None, lang="ja"):
+        super().__init__(parent)
+        self.play = parent
+        self.lang = lang
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet("background-color: #000; border: none;")
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.inner = QWidget()
+        scroll.setWidget(self.inner)
+        self.inner_layout = QVBoxLayout(self.inner)
+        self.inner_layout.setContentsMargins(10, 10, 10, 10)
+        self.inner_layout.setSpacing(8)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+    def refresh(self):
+        # Clear existing
+        while self.inner_layout.count():
+            item = self.inner_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        lang = self.play.language
+        now = datetime.now()
+
+        for entry in self.play.event_log:
+            etype = entry.get("type")
+            dt = entry["time"]
+            icon_name = entry.get("icon")
+            diff = (now - dt).total_seconds()
+            
+            # Reconstruct message based on current language
+            msg = ""
+            if etype == "dmg":
+                p, slot, delta = entry["p"], entry["slot"], entry["delta"]
+                mkey = "log_damage_inc" if delta > 0 else "log_damage_dec"
+                msg = UI_TEXT[lang][mkey].format(p=p, c=slot, d=abs(delta))
+            elif etype == "life":
+                delta = entry["delta"]
+                mkey = "log_life_inc" if delta > 0 else "log_life_dec"
+                msg = UI_TEXT[lang][mkey].format(n=abs(delta))
+            elif etype == "counter":
+                name, delta = entry["name"], entry["delta"]
+                mkey = "log_counter_inc" if delta > 0 else "log_counter_dec"
+                msg = UI_TEXT[lang][mkey].format(name=name.capitalize(), n=abs(delta))
+
+            if diff < 60:
+                time_part = UI_TEXT[lang]["time_sec_ago"].format(n=int(diff))
+            else:
+                time_part = UI_TEXT[lang]["time_min_ago"].format(n=int(diff // 60))
+
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(5, 2, 5, 2)
+            row_layout.setSpacing(10)
+            
+            if icon_name:
+                icon_path = app_dir() / "icons" / f"{icon_name}.png"
+                if icon_path.exists():
+                    icon_lbl = QLabel()
+                    pix = QPixmap(str(icon_path)).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    icon_lbl.setPixmap(pix)
+                    icon_lbl.setFixedSize(20, 20)
+                    row_layout.addWidget(icon_lbl)
+            else:
+                # Spacer for entries without icons to align text
+                spacer = QLabel()
+                spacer.setFixedSize(20, 20)
+                row_layout.addWidget(spacer)
+            
+            # Use 16 spaces for spacing as requested (doubled from previous 8)
+            full_text = f"{msg}                {time_part}"
+            lbl = QLabel(full_text)
+            lbl.setFont(QFont("Meiryo UI", 11))
+            lbl.setWordWrap(False)
+            lbl.setStyleSheet("color: #ccc;")
+            
+            # Ensure the label doesn't expand and force 2 lines
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            
+            row_layout.addWidget(lbl)
+            row_layout.addStretch()
+            
+            row.setStyleSheet("border-bottom: 1px solid #333;")
+            row.setFixedHeight(30) # Force height to keep 1 line
+            self.inner_layout.addWidget(row)
+
+        self.inner_layout.addStretch()
+
+        # Scroll to bottom
+        QTimer.singleShot(50, lambda: self.scroll_to_bottom())
+
+    def scroll_to_bottom(self):
+        scroll_area = self.findChild(QScrollArea)
+        if scroll_area:
+            scroll_area.verticalScrollBar().setValue(
+                scroll_area.verticalScrollBar().maximum()
+            )
+
 # ================= Counter =================
 
 class CounterWidget(QWidget):
+    valueChanged = pyqtSignal(int)
+
     def __init__(self, title, initial, min_value=None, max_value=None):
         super().__init__()
         self.initial = initial
@@ -617,7 +849,7 @@ class CounterWidget(QWidget):
 
         self.title_label = QLabel(title)
         self.title_label.setAlignment(Qt.AlignCenter)
-        self.title_label.setFont(QFont("", UI_FONT_SIZE))
+        self.title_label.setFont(QFont("Meiryo UI", UI_FONT_SIZE))
 
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
@@ -641,11 +873,13 @@ class CounterWidget(QWidget):
         if self.max_value is None or self.value < self.max_value:
             self.value += 1
             self.value_label.setText(str(self.value))
+            self.valueChanged.emit(1)
 
     def dec(self):
         if self.min_value is None or self.value > self.min_value:
             self.value -= 1
             self.value_label.setText(str(self.value))
+            self.valueChanged.emit(-1)
 
     def reset(self):
         self.value = self.initial
@@ -653,6 +887,8 @@ class CounterWidget(QWidget):
 
 
 class IconCounterWidget(QWidget):
+    valueChanged = pyqtSignal(int)
+
     def __init__(self, icon_path: Path, initial=0):
         super().__init__()
         self.value = initial
@@ -663,7 +899,7 @@ class IconCounterWidget(QWidget):
 
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
-        self.value_label.setFont(QFont("", 20, QFont.Bold))
+        self.value_label.setFont(QFont("Meiryo UI", 20, QFont.Bold))
         self.value_label.setFixedWidth(40)
 
         up = QPushButton("▲")
@@ -704,8 +940,12 @@ class IconCounterWidget(QWidget):
         self.resize_icon()
 
     def change(self, delta):
+        old_val = self.value
         self.value = max(0, self.value + delta)
-        self.value_label.setText(str(self.value))
+        actual_delta = self.value - old_val
+        if actual_delta != 0:
+            self.value_label.setText(str(self.value))
+            self.valueChanged.emit(actual_delta)
 
     def reset(self):
         self.value = 0
@@ -744,7 +984,7 @@ class CommanderDamageCounter(QWidget):
 
         self.value_label = QLabel(str(self.value))
         self.value_label.setAlignment(Qt.AlignCenter)
-        self.value_label.setFont(QFont("", 18, QFont.Bold))
+        self.value_label.setFont(QFont("Meiryo UI", 18, QFont.Bold))
         self.value_label.setMinimumWidth(40)
 
         up = QPushButton("▲")

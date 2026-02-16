@@ -10,7 +10,8 @@ from PyQt5.QtWidgets import (
     QSplitter, QSpinBox, QDialog, QProgressBar, QSizePolicy,
     QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea
 )
-from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer
+from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer, QSortFilterProxyModel
+from image_selector import ImageSelectDialog
 from PyQt5.QtGui import (
     QTextDocument,
     QPixmap,
@@ -34,6 +35,7 @@ import traceback
 from play_window import PlayWindow
 from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
 from common_func import strip_ruby, mana_symbol_to_filename, app_dir, exe_dir
+from deck_building_window import DeckBuildingWindow
 
 import mulligan_simulator
 
@@ -195,6 +197,15 @@ def ensure_emojis():
             "Error",
             f"Failed to download mana symbol images:\n{e}"
         )
+class CSVFilterProxyModel(QSortFilterProxyModel):
+    def filterAcceptsRow(self, source_row, source_parent):
+        model = self.sourceModel()
+        index = model.index(source_row, 0, source_parent)
+        if index.isValid():
+            filename = model.data(index)
+            if filename and isinstance(filename, str) and filename.endswith("_consideration.csv"):
+                return False
+        return super().filterAcceptsRow(source_row, source_parent)
 
 
 # ================= Mana Symbol Handling =================
@@ -386,6 +397,18 @@ class MainWindow(QWidget):
             QPushButton:hover { background-color: #4d4d4d; }
         """)
 
+        self.btn_deck_building = QPushButton(UI_TEXT[self.language]["deck_building"])
+        self.btn_deck_building.clicked.connect(self.launch_deck_building)
+        self.btn_deck_building.setStyleSheet("""
+            QPushButton {
+                background-color: #3d3d3d;
+                color: #00ccff;
+                font-weight: bold;
+                border: 1px solid #00ccff;
+            }
+            QPushButton:hover { background-color: #4d4d4d; }
+        """)
+
         self.btn_txt = QPushButton(UI_TEXT[self.language]["generate_fm_txt"])
         self.btn_csv = QPushButton(UI_TEXT[self.language]["load_csv"])
         self.btn_txt.clicked.connect(self.generate_from_txt)
@@ -414,6 +437,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.btn_csv)
         layout.addWidget(self.reset_btn)
         layout.addWidget(self.mulligan_btn)
+        layout.addWidget(self.btn_deck_building)
         layout.addSpacing(20)
         layout.addWidget(self.font_size_label)
         layout.addWidget(self.font_size)
@@ -435,6 +459,7 @@ class MainWindow(QWidget):
         self.camera_chk.setText(UI_TEXT[lang]["camera_mode"])
         self.reset_btn.setText(UI_TEXT[lang]["reset"])
         self.mulligan_btn.setText(UI_TEXT[lang]["mulligan_simulator"])
+        self.btn_deck_building.setText(UI_TEXT[lang]["deck_building"])
         self.commander_a_btn.setText(UI_TEXT[lang]["commander_a"])
         self.commander_b_btn.setText(UI_TEXT[lang]["commander_b"])
         self.companion_btn.setText(UI_TEXT[lang]["companion"])
@@ -556,7 +581,8 @@ class MainWindow(QWidget):
             "name_back",
             "name_ja",
             "name_en",
-            "type",
+            "type_front",
+            "type_back",
             "mana_cost",
             "text_front_ja",
             "text_front_en",
@@ -626,9 +652,39 @@ class MainWindow(QWidget):
 
     def load_csv_direct(self):
         base = exe_dir()
-        csv_path, _ = QFileDialog.getOpenFileName(self, "Select CSV", str(base), "CSV (*.csv)")
-        if csv_path:
-            self.load_csv(Path(csv_path), Path(csv_path).parent)
+        dialog = QFileDialog(self, "Select CSV", str(base), "CSV (*.csv)")
+        dialog.setOption(QFileDialog.DontUseNativeDialog) # Required on Windows for ProxyModel
+        
+        # Style the dialog for dark mode (non-native dialog inherits QWidget style but headers can be tricky)
+        dialog.setStyleSheet(f"""
+            QFileDialog {{
+                background-color: #222;
+            }}
+            QTreeView, QListView {{
+                background-color: #111;
+                color: white;
+            }}
+            QHeaderView::section {{
+                background-color: #333;
+                color: white;
+                padding: 4px;
+                border: 1px solid #444;
+            }}
+            QLineEdit {{
+                background-color: #111;
+                color: white;
+                border: 1px solid #555;
+            }}
+        """)
+
+        proxy = CSVFilterProxyModel(self)
+        dialog.setProxyModel(proxy)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                csv_path = files[0]
+                self.load_csv(Path(csv_path), Path(csv_path).parent)
 
     def load_csv(self, csv_path: Path, image_dir: Path):
         self.csv_path = csv_path 
@@ -639,17 +695,33 @@ class MainWindow(QWidget):
         self.image_dir = image_dir
         self.play.image_dir = image_dir
 
+        temp_cards = []
         with open(csv_path, encoding="utf-8") as f:
-            self.cards = list(csv.DictReader(f))
+            temp_cards = list(csv.DictReader(f))
 
-        if self.cards:
-            last_card = self.cards[-1]
-            last_card["Commander_A"] = (
-                last_card["name_ja"]
-                if self.language == "ja"
-                else last_card["name_en"]
-            )
-            self.save_current_csv()  
+        if temp_cards:
+            # Migration detection: if 'type_front' is missing, it's old schema
+            if temp_cards[0].get("type_front") is None:
+                logging.info(f"Migrating legacy CSV: {csv_path}")
+                for c in temp_cards:
+                    old_type = c.get("type", "")
+                    if " // " in old_type:
+                        parts = old_type.split(" // ")
+                        c["type_front"] = parts[0]
+                        c["type_back"] = parts[1] if len(parts) > 1 else ""
+                    else:
+                        c["type_front"] = old_type
+                        c["type_back"] = ""
+                    # Remove old key
+                    if "type" in c:
+                        del c["type"]
+                
+                # Resave new schema immediately
+                self.cards = temp_cards
+                self.save_current_csv()
+            else:
+                self.cards = temp_cards
+
 
         self.apply_filter()
         if self.cards:
@@ -664,9 +736,8 @@ class MainWindow(QWidget):
         selected_type = self.type_filter.currentData()
 
         for i, c in enumerate(self.cards):
-            # The "type" field in CSV is in a format like "Creature — Elf"
-            # Extract only the main types
-            type_line = c["type"]
+            # Use 'type_front' for filtering
+            type_line = c.get("type_front", "")
             main_types_part = type_line.split(" — ")[0]
 
             # Split by spaces → ["Artifact", "Creature"]
@@ -677,7 +748,7 @@ class MainWindow(QWidget):
                 continue
 
             # Use UI language for the display label
-            card_type_label = get_display_type(c["type"], self.language)
+            card_type_label = get_display_type(c.get("type_front", ""), self.language)
             raw_name = c["name_ja"] if self.language == "ja" else c["name_en"]
             card_name = strip_ruby(raw_name)
 
@@ -782,330 +853,58 @@ class MainWindow(QWidget):
         
         self.sim_start_window.show()
 
+    def launch_deck_building(self):
+        if not self.csv_path or not self.cards:
+            QMessageBox.warning(
+                self,
+                "CSV Loader",
+                UI_TEXT[self.language]["csv_not_loaded"]
+            )
+            return
+
+        self.deck_building_win = DeckBuildingWindow(self.cards, self.image_dir, self.language, csv_path=self.csv_path)
+        self.deck_building_win.data_changed.connect(self.apply_filter)
+        self.deck_building_win.show()
+
     def open_image_selector(self, item):
         idx = self.filtered_indices[self.list.row(item)]
         card = self.cards[idx]
-
         image_path = self.image_dir / card["card_file_front"]
-
         card_name = card["name_en"]
+
         dlg = ImageSelectDialog(card_name, image_path, self)
-
         if dlg.exec_():
-            self.play._update() 
+            face = dlg.selected_face
+            front_path = self.image_dir / card["card_file_front"]
+            back_path = (self.image_dir / card["card_file_back"]) if card["card_file_back"] else None
 
-
-
-
-
-
-class ImageSelectDialog(QDialog):
-    def __init__(self, card_name, image_path: Path, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setWindowTitle("Select Card Image")
-        self.resize(820, 620)
-        self.pool = QThreadPool.globalInstance()
-        self.pool.setMaxThreadCount(4)
-        self.thumb_cache = {}
-        self.request_id = 0
-
-        self.card_name = card_name
-        self.image_path = image_path
-
-        # Performance optimization parameters
-        self.page_size = 10
-        self.current_page = 0
-        self.all_results = []
-
-        self.list = QListWidget()
-        self.list.setViewMode(QListWidget.IconMode)
-        self.thumb_size = QSize(120, 170)
-        self.list.setIconSize(self.thumb_size)
-        self.list.setResizeMode(QListWidget.Adjust)
-        self.list.setSpacing(10)
-        self.list.setMovement(QListWidget.Static)
-        self.list.setWordWrap(True)
-
-        self.page_size_combo = QComboBox()
-        self.page_size_combo.addItems(["10", "20", "50"])
-        self.page_size_combo.setCurrentText("10")
-        self.page_size_combo.currentIndexChanged.connect(self.change_page_size)
-
-        # Language selection check
-        self.chk_ja = QCheckBox("日本語")
-        self.chk_en = QCheckBox("English")
-        self.chk_other = QCheckBox("Others")
-        self.chk_ja.setChecked(True)
-
-        self.chk_ja.stateChanged.connect(self.update_search)
-        self.chk_en.stateChanged.connect(self.update_search)
-        self.chk_other.stateChanged.connect(self.update_search)
-
-        # Page navigation
-        self.prev_btn = QPushButton("◀ Prev")
-        self.next_btn = QPushButton("Next ▶")
-        self.prev_btn.clicked.connect(self.prev_page)
-        self.next_btn.clicked.connect(self.next_page)
-
-        top = QHBoxLayout()
-        top.addWidget(self.chk_ja)
-        top.addWidget(self.chk_en)
-        top.addWidget(self.chk_other)
-        top.addSpacing(20)
-        top.addWidget(QLabel("Items per page"))
-        top.addWidget(self.page_size_combo)
-        top.addStretch()
-
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nav.addWidget(self.prev_btn)
-        nav.addWidget(self.next_btn)
-        nav.addStretch()
-
-        layout = QVBoxLayout(self)
-        layout.addLayout(top)
-        layout.addWidget(self.list)
-        layout.addLayout(nav)
-
-        self.list.itemClicked.connect(self.select_image)
-
-        self.update_search()
-
-    # ---------- Search (URLs only) ----------
-    def update_search(self):
-        self.current_page = 0
-
-        use_other = self.chk_other.isChecked()
-
-        # -----------------------------
-        #  Determine language
-        # -----------------------------
-        if not use_other:
-            langs = []
-            if self.chk_ja.isChecked():
-                langs.append("ja")
-            if self.chk_en.isChecked():
-                langs.append("en")
-
-            if not langs:
-                langs = ["ja", "en"]
-        else:
-            langs = ("ja", "en", "fr", "de", "it", "es", "pt", "ko", "ru", "zhs", "zht")
-
-        # -----------------------------
-        # Fetch from Scryfall (per printing)
-        # -----------------------------
-        raw_results = generator.search_card_images(
-            self.card_name,
-            languages=tuple(langs)
-        )
-
-        # -----------------------------
-        # Flatten per face
-        # -----------------------------
-        faces = []
-
-        for entry in raw_results:
-            lang = entry.get("lang")
-
-            # UI filter when "Others" is enabled
-            if use_other:
-                if lang == "ja" and not self.chk_ja.isChecked():
-                    continue
-                if lang == "en" and not self.chk_en.isChecked():
-                    continue
-                if lang not in ("ja", "en") and not self.chk_other.isChecked():
-                    continue
-
-            for face in entry.get("faces", []):
-                faces.append({
-                    "card_id": entry["card_id"],
-                    "oracle_id": entry["oracle_id"],
-                    "lang": lang,
-                    "face_index": face["face_index"],
-                    "face_name": face["name"],
-                    "side": face["side"],
-                    "image_normal": face["image_normal"],   # ★
-                    "image_small": face.get("image_small"), # ★
-                })
-
-
-
-        self.all_results = faces
-        self.update_page()
-
-    def update_page(self):
-        self.clear_list_safely()
-        self.request_id += 1
-        current_id = self.request_id
-
-        start = self.current_page * self.page_size
-        end = start + self.page_size
-
-        for i, r in enumerate(self.all_results[start:end]):
-            # Display name: card name + face + language
-            title = f'{r["face_name"]} [{r["side"]}] ({r["lang"]})'
-            item = QListWidgetItem(title)
-
-            item.setSizeHint(QSize(
-                self.thumb_size.width() + 20,
-                self.thumb_size.height() + 40
-            ))
-
-            # Store per-face data as-is
-            item.setData(Qt.UserRole, r)
-            self.list.addItem(item)
-
-            thumb_url = r.get("image_small")
-
-            if thumb_url:
-                loader = ImageLoader(
-                    i,
-                    thumb_url,
-                    self.thumb_size,
-                    current_id
-                )
-                loader.signals.finished.connect(self.on_image_loaded)
-                self.pool.start(loader)
-
-        self.prev_btn.setEnabled(self.current_page > 0)
-        self.next_btn.setEnabled(
-            (self.current_page + 1) * self.page_size < len(self.all_results)
-        )
-
- 
-    def on_image_loaded(self, req_id, index, img):
-        if req_id != self.request_id:
-            return  
-
-        item = self.list.item(index)
-        if item:
-            item.setIcon(QIcon(QPixmap.fromImage(img)))
-
-
-
-    def change_page_size(self):
-        self.page_size = int(self.page_size_combo.currentText())
-        self.current_page = 0
-        self.update_page()
-
-    def next_page(self):
-        if (self.current_page + 1) * self.page_size < len(self.all_results):
-            self.current_page += 1
-            self.update_page()
-
-    def prev_page(self):
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.update_page()
-
-    # ---------- Image selection ----------
-    def select_image(self, item):
-        face = item.data(Qt.UserRole)
-
-        try:
-            parent = self.parent()
-
-            # Get the current card from the parent (MainWindow)
-            idx = parent.filtered_indices[parent.list.row(parent.list.currentItem())]
-            card = parent.cards[idx]
-
-            front_path = parent.image_dir / card["card_file_front"]
-            back_path = (
-                parent.image_dir / card["card_file_back"]
-                if card["card_file_back"]
-                else None
-            )
-
-            # ---------- Selected face ----------
+            # Download selected face
             data = requests.get(face["image_normal"], timeout=5).content
-
             if face["face_index"] == 0:
                 front_path.write_bytes(data)
-            else:
-                if back_path:
-                    back_path.write_bytes(data)
+            elif back_path:
+                back_path.write_bytes(data)
 
-            # ---------- Update the opposite face as well ----------
+            # Update opposite face if it's a double-faced card
             if back_path:
-                for r in self.all_results:
-                    if (
-                        r["card_id"] == face["card_id"]
-                        and r["lang"] == face["lang"]
-                        and r["face_index"] != face["face_index"]
-                    ):
-                        other_data = requests.get(
-                            r["image_normal"], timeout=5
-                        ).content
-
+                for r in dlg.all_results:
+                    if (r["card_id"] == face["card_id"] and 
+                        r["lang"] == face["lang"] and 
+                        r["face_index"] != face["face_index"]):
+                        
+                        other_data = requests.get(r["image_normal"], timeout=5).content
                         if face["face_index"] == 0:
                             back_path.write_bytes(other_data)
                         else:
                             front_path.write_bytes(other_data)
                         break
 
-            QMessageBox.information(
-                self,
-                "Done",
-                "Both front and back card images have been updated."
-            )
-            self.accept()
-
-        except Exception as e:
-            QMessageBox.critical(self, "error", str(e))
+            QMessageBox.information(self, "Done", "Card images updated.")
+            self.play._update()
 
 
-    def fetch_image(self, url: str):
-        try:
-            r = requests.get(url, timeout=5)
-            pix = QPixmap()
-            pix.loadFromData(r.content)
-            return pix
-        except Exception:
-            return None
-
-    def clear_list_safely(self):
-        self.list.setUpdatesEnabled(False)
-        self.list.clear()
-        self.list.setUpdatesEnabled(True)
-
-class ImageResult(QObject):
-    finished = pyqtSignal(int, int, QImage)
-
-class ImageLoader(QRunnable):
-    def __init__(self, index, url, size, request_id):
-        super().__init__()
-        self.index = index
-        self.url = url
-        self.size = size
-        self.request_id = request_id
-        self.signals = ImageResult()
-
-        self.session = requests.Session()
-
-    def run(self):
-        try:
-            r = self.session.get(self.url, timeout=5)
-            r.raise_for_status()
-
-            img = QImage.fromData(r.content)
-            if img.isNull():
-                return
-
-            img = img.scaled(
-                self.size,
-                Qt.KeepAspectRatio,
-                Qt.FastTransformation
-            )
-
-            self.signals.finished.emit(self.request_id, self.index, img)
 
 
-        except Exception:
-            pass
-        finally:
-            self.session.close()
 
 
 

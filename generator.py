@@ -218,7 +218,7 @@ def safe_filename(text: str) -> str:
 
 
 def looks_japanese(text: str) -> bool:
-    return bool(re.search(r"[ぁ-んァ-ン一-龯]", text))
+    return bool(re.search(r"[ぁ-んァ-ン一-龯ー]", text))
 
 def fetch_japanese_text_by_oracle_id(oracle_id: str) -> str:
     if not oracle_id:
@@ -404,9 +404,132 @@ def get_card_name(card, lang: str = "ja"):
         if looks_japanese(" // ".join(names)):
             return " // ".join(names)
 
-
     return card.get("name", "")
 
+
+def get_card_autocomplete(query: str) -> list:
+    """
+    Fetch autocomplete suggestions from Scryfall.
+    Supports Japanese by falling back to search API.
+    """
+    if not query or len(query) < 2:
+        return []
+
+    if looks_japanese(query):
+        # Scryfall's /autocomplete is English only.
+        # For Japanese, we use /search with a name fragment.
+        search_q = f"name:{query} lang:ja"
+        r = safe_get(
+            session,
+            "https://api.scryfall.com/cards/search",
+            params={"q": search_q, "unique": "cards"},
+            timeout=3
+        )
+        if r and r.status_code == 200:
+            data = r.json().get("data", [])
+            results = []
+            for card in data:
+                # Prioritize Japanese printed name
+                name = card.get("printed_name") or card["name"]
+                if name not in results:
+                    results.append(name)
+            logger.info(f"Autocomplete JA: {query} -> {results[:5]}")
+            return results[:20] # Limit suggestions
+        return []
+    else:
+        # Standard English autocomplete
+        r = safe_get(
+            session,
+            "https://api.scryfall.com/cards/autocomplete",
+            params={"q": query},
+            timeout=3
+        )
+        if r and r.status_code == 200:
+            return r.json().get("data", [])
+    
+    return []
+
+
+def create_card_row(name: str, out_dir: Path, language: str = "ja"):
+    """
+    Fetch card data and download images for a single card name.
+    Returns a row dictionary compatible with the CSV schema.
+    """
+    card = fetch_card(name, language)
+    if card is None:
+        return None
+
+    en = card["name"]
+    ja = card.get("printed_name", "")
+    safe_en = safe_filename(en)
+
+    row = {
+        "card_file_front": "",
+        "card_file_back": "",
+        "name_front": "",
+        "name_back": "",
+        "name_ja": get_card_name(card, "ja"),
+        "name_en": get_card_name(card, "en"),
+        "type_front": "",
+        "type_back": "",
+        "mana_cost": card.get("mana_cost", ""),
+        "text_front_ja": "",
+        "text_front_en": "",
+        "text_back_ja": "",
+        "text_back_en": "",
+        "Commander_A": "",
+        "Commander_B": "",
+        "Companion": "",
+    }
+
+    # 1. Image Download & Basic Info (SFC vs DFC)
+    if "image_uris" in card:
+        # Single-faced
+        row["card_file_front"] = f"{safe_en}_front.jpg"
+        download_image(card["image_uris"]["normal"], out_dir / row["card_file_front"])
+        
+        row["name_front"] = en
+        row["type_front"] = card.get("type_line", "")
+        
+        row["text_front_en"] = get_card_text(card, "en")
+        row["text_front_ja"] = get_card_text(card, "ja")
+        if not looks_japanese(row["text_front_ja"]):
+            [_, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+            if looks_japanese(jp_txt):
+                row["text_front_ja"] = jp_txt
+    
+    elif "card_faces" in card and len(card["card_faces"]) >= 2:
+        # Double-faced
+        face1, face2 = card["card_faces"]
+        row["card_file_front"] = f"{safe_en}_front.jpg"
+        row["card_file_back"] = f"{safe_en}_back.jpg"
+        
+        download_image(face1["image_uris"]["normal"], out_dir / row["card_file_front"])
+        download_image(face2["image_uris"]["normal"], out_dir / row["card_file_back"])
+        
+        row["name_front"] = face1.get("printed_name", face1["name"])
+        row["name_back"] = face2.get("printed_name", face2["name"])
+        row["type_front"] = face1.get("type_line", "")
+        row["type_back"] = face2.get("type_line", "")
+        
+        row["text_front_en"] = get_card_text(face1, "en")
+        row["text_back_en"] = get_card_text(face2, "en")
+        row["text_front_ja"] = get_card_text(face1, "ja")
+        if not looks_japanese(row["text_front_ja"]):
+            [_, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+            if looks_japanese(jp_txt):
+                row["text_front_ja"] = jp_txt
+        
+        row["text_back_ja"] = get_card_text(face2, "ja")
+        if not looks_japanese(row["text_back_ja"]):
+            [_, jp_txt] = fetch_text_from_wisdom_guild(en, "back")
+            if looks_japanese(jp_txt):
+                row["text_back_ja"] = jp_txt
+    else:
+        logger.info(f"Card format not supported: {en}")
+        return None
+
+    return row
 
 def generate_from_txt(
     txt_path: Path,
@@ -414,161 +537,36 @@ def generate_from_txt(
     language="ja",
     progress_callback=None
 ):
-    index = 1
     names = parse_decklist(txt_path)
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = out_dir / f"{txt_path.stem}.csv"
     rows = []
-
     total = len(names)
 
     for i, name in enumerate(names, 1):
-        card = fetch_card(name,language)
-        if card is None:
-            continue  
-
-        en = card["name"]
-        ja = card.get("printed_name", "")
-        display_name = ja or en
-        base_name = safe_filename(f"{en}_{ja}" if ja else en)
-
-        # -------------------------
-        # Single-faced card
-        # -------------------------
-        if "image_uris" in card:
-            img_url = card["image_uris"]["normal"]
-
-            safe_en = safe_filename(en)
-
-            card_file_front = f"{safe_en}_front.jpg"
-            card_file_back = ""
-
-
-            download_image(img_url, out_dir / card_file_front)
-
-            card = fetch_card(name,"ja")
-            text_front_en = get_card_text(card, "en")
-
-            text_front_ja = get_card_text(card, "ja")
-            if not looks_japanese(text_front_ja):
-                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
-                if looks_japanese(jp_txt):
-                    text_front_ja = jp_txt
+        if progress_callback:
+            progress_callback(i, total, name)
             
-            rows.append({
-                "card_file_front": card_file_front,
-                "card_file_back": "",
-                "name_front": en,
-                "name_back": "",
+        row = create_card_row(name, out_dir, language)
+        if row:
+            rows.append(row)
+        
+        time.sleep(0.1)
 
+    if not rows:
+        return None
 
-                "name_ja": get_card_name(card, "ja"),
-                "name_en": get_card_name(card, "en"),
+    fieldnames = [
+        "card_file_front", "card_file_back", "name_front", "name_back",
+        "name_ja", "name_en", "type_front", "type_back", "mana_cost",
+        "text_front_ja", "text_front_en", "text_back_ja", "text_back_en",
+        "Commander_A", "Commander_B", "Companion",
+    ]
 
-                "type": card["type_line"],
-                "mana_cost": card.get("mana_cost", ""),
-
-                "text_front_ja": text_front_ja,
-                "text_front_en": text_front_en,
-                "text_back_ja": "",
-                "text_back_en": "",
-            })
-
-
-            index += 1
-
-            if progress_callback:
-                progress_callback(i, total, display_name)
-
-        # -------------------------
-        # Double-faced card
-        # -------------------------
-        elif "card_faces" in card and len(card["card_faces"]) >= 2:
-            face1, face2 = card["card_faces"]
-
-            safe_en = safe_filename(en)
-
-            card_file_front = f"{safe_en}_front.jpg"
-            card_file_back = f"{safe_en}_back.jpg"
-
-
-            download_image(face1["image_uris"]["normal"], out_dir / card_file_front)
-            download_image(face2["image_uris"]["normal"], out_dir / card_file_back)
-
-            card = fetch_card(name,"ja")
-
-            text_front_ja = get_card_text(face1, "ja")
-            if not looks_japanese(text_front_ja):
-                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
-                if looks_japanese(jp_txt):
-                    text_front_ja = jp_txt
-            text_back_ja = get_card_text(face2, "ja")
-            if not looks_japanese(text_back_ja):
-                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
-                if looks_japanese(jp_txt):
-                    text_back_ja = jp_txt
-            rows.append({
-                "card_file_front": card_file_front,
-                "card_file_back": card_file_back,
-
-                "name_front": face1.get("printed_name", face1["name"]),
-                "name_back": face2.get("printed_name", face2["name"]),
-                
-
-                "name_ja": get_card_name(card, "ja"),
-                "name_en": get_card_name(card, "en"),
-
-                "type": card["type_line"],
-                "mana_cost": card.get("mana_cost", ""),
-
-
-                "text_front_ja": text_front_ja,
-                "text_front_en": get_card_text(face1, "en"),
-                "text_back_ja": text_back_ja,
-                "text_back_en": get_card_text(face2, "en"),
-            })
-
-            index += 1
-
-
-            if progress_callback:
-                progress_callback(i, total, display_name)
-
-        else:
-            logging.info(f"Image not supported for card: {en}")
-
-        time.sleep(0.2)  # Throttle requests to avoid overloading Scryfall
-
- 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "card_file_front",
-                "card_file_back",
-                "name_front",
-                "name_back",
-                "name_ja",
-                "name_en",
-                "type",
-                "mana_cost",
-                "text_front_ja",
-                "text_front_en",
-                "text_back_ja",
-                "text_back_en",
-                "Commander_A",
-                "Commander_B",
-                "Companion",
-            ],
-            quoting=csv.QUOTE_ALL
-        )
+        writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
         writer.writeheader()
-        for row in rows:
-            row["Commander_A"] = ""
-            row["Commander_B"] = ""
-            row["Companion"] = ""
-            writer.writerow(row)
-
+        writer.writerows(rows)
 
     return csv_path

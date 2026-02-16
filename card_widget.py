@@ -30,6 +30,7 @@ class CardWidget(QWidget):
             "color: white;"
             "font-size: 28px;"
             "font-weight: bold;"
+            "font-family: 'Meiryo UI';"
         )
         self.overlay.hide()
 
@@ -50,6 +51,7 @@ class CardWidget(QWidget):
                 border-radius: 4px;
                 padding: 4px;
                 font-size: 14px;
+                font-family: 'Meiryo UI';
             }
             QPushButton:hover { background-color: #ff6b81; }
         """)
