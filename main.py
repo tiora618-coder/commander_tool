@@ -56,7 +56,7 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 import logging
 
-DEBUG_LOG = True
+DEBUG_LOG = False
 
 def setup_logging():
     log_dir = (
@@ -931,4 +931,6 @@ if __name__ == "__main__":
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())
+
+
 

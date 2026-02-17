@@ -106,14 +106,38 @@ echo Creating ZIP: %ZIP_NAME%
 copy /y "%README_BASE%" "%README_BAK%" >nul
 copy /y "%README_TMP%" "%README_BASE%" >nul
 
-powershell -NoLogo -NoProfile -Command ^
- "Compress-Archive -Force '%DIST_DIR%\CommanderTool.exe','%RELEASE_DIR%\LICENSE','%README_BASE%','%RELEASE_DIR%\Sample_deck_file_Zurgo_Stormrender.txt' '%ZIP_PATH%'"
+REM Wait for file locks to release (antivirus scan, PyInstaller cleanup)
+echo Waiting for file locks to release...
+timeout /t 10 /nobreak >nul
 
+REM Delete any existing ZIP before creating
+if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%" >nul
+
+set RETRY_COUNT=0
+:ZIP_RETRY
+set /a RETRY_COUNT+=1
+echo ZIP creation attempt !RETRY_COUNT! of 3...
+
+powershell -NoLogo -NoProfile -Command "Compress-Archive -Force '%DIST_DIR%\CommanderTool.exe','%RELEASE_DIR%\LICENSE','%README_BASE%','%RELEASE_DIR%\Sample_deck_file_Zurgo_Stormrender.txt' '%ZIP_PATH%'" 2>nul
+
+if exist "%ZIP_PATH%" (
+    echo ZIP created successfully: %ZIP_PATH%
+    goto ZIP_DONE
+)
+
+if !RETRY_COUNT! lss 3 (
+    echo ZIP not created. Waiting 7 seconds before retry...
+    timeout /t 7 /nobreak >nul
+    goto ZIP_RETRY
+)
+
+echo ERROR: Failed to create ZIP after 3 attempts.
+goto ZIP_DONE
+
+:ZIP_DONE
 copy /y "%README_BAK%" "%README_BASE%" >nul
 del "%README_BAK%" >nul
 del "%README_TMP%" >nul
-
-echo ZIP created: %ZIP_PATH%
 
 
 REM ===============================
