@@ -13,12 +13,13 @@ class ImageResult(QObject):
     finished = pyqtSignal(int, int, QImage)
 
 class ImageLoader(QRunnable):
-    def __init__(self, index, url, size, request_id):
+    def __init__(self, index, url, size, request_id, dpr=1.0):
         super().__init__()
         self.index = index
         self.url = url
         self.size = size
         self.request_id = request_id
+        self.dpr = dpr
         self.signals = ImageResult()
         self.session = requests.Session()
 
@@ -31,8 +32,10 @@ class ImageLoader(QRunnable):
             if img.isNull():
                 return
 
+            # Scale to physical pixels (logical size * DPR)
+            scaled_size = self.size * self.dpr
             img = img.scaled(
-                self.size,
+                scaled_size,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             )
@@ -44,7 +47,7 @@ class ImageLoader(QRunnable):
             self.session.close()
 
 class ImageSelectDialog(QDialog):
-    def __init__(self, card_name, image_path: Path, parent=None):
+    def __init__(self, card_name, image_path: Path, parent=None, is_token=False):
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowTitle("Select Card Image")
@@ -56,6 +59,7 @@ class ImageSelectDialog(QDialog):
 
         self.card_name = card_name
         self.image_path = image_path
+        self.is_token = is_token
 
         # Performance optimization parameters
         self.page_size = 10
@@ -133,7 +137,8 @@ class ImageSelectDialog(QDialog):
 
         raw_results = generator.search_card_images(
             self.card_name,
-            languages=tuple(langs)
+            languages=tuple(langs),
+            is_token=self.is_token
         )
 
         faces = []
@@ -152,6 +157,9 @@ class ImageSelectDialog(QDialog):
                     "face_index": face["face_index"],
                     "face_name": face["name"],
                     "side": face["side"],
+                    "power": face.get("power", ""),
+                    "toughness": face.get("toughness", ""),
+                    "oracle_text": face.get("oracle_text", ""),
                     "image_normal": face["image_normal"],
                     "image_small": face.get("image_small"),
                 })
@@ -167,8 +175,27 @@ class ImageSelectDialog(QDialog):
         start = self.current_page * self.page_size
         end = start + self.page_size
 
+        dpr = self.devicePixelRatioF()
         for i, r in enumerate(self.all_results[start:end]):
             title = f'{r["face_name"]} [{r["side"]}] ({r["lang"]})'
+            
+            # Enrich title for tokens (P/T and Abilities)
+            if self.is_token:
+                stats = []
+                p, t = r.get("power"), r.get("toughness")
+                if p or t:
+                    stats.append(f"{p}/{t}")
+                
+                # Extract first significant part of oracle text (abilities)
+                txt = r.get("oracle_text", "").replace("\n", " ")
+                if txt:
+                    # Clip to 30 chars for readability
+                    if len(txt) > 30: txt = txt[:27] + "..."
+                    stats.append(txt)
+                
+                if stats:
+                    title += "\n" + " - ".join(stats)
+
             item = QListWidgetItem(title)
             item.setSizeHint(QSize(self.thumb_size.width() + 20, self.thumb_size.height() + 40))
             item.setData(Qt.UserRole, r)
@@ -176,7 +203,7 @@ class ImageSelectDialog(QDialog):
 
             thumb_url = r.get("image_small")
             if thumb_url:
-                loader = ImageLoader(i, thumb_url, self.thumb_size, current_id)
+                loader = ImageLoader(i, thumb_url, self.thumb_size, current_id, dpr=dpr)
                 loader.signals.finished.connect(self.on_image_loaded)
                 self.pool.start(loader)
 
@@ -187,7 +214,9 @@ class ImageSelectDialog(QDialog):
         if req_id != self.request_id: return
         item = self.list.item(index)
         if item:
-            item.setIcon(QIcon(QPixmap.fromImage(img)))
+            pix = QPixmap.fromImage(img)
+            pix.setDevicePixelRatio(self.devicePixelRatioF())
+            item.setIcon(QIcon(pix))
 
     def change_page_size(self):
         self.page_size = int(self.page_size_combo.currentText())

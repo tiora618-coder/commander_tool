@@ -13,6 +13,7 @@ from PyQt5.QtGui import QFont, QPixmap, QPolygon, QPainter, QColor
 from deck_loader import load_deck_from_csv
 from simulation_window import SimulationWindow
 from gui_language import UI_TEXT, LANG_EN, LANG_JA
+from common_func import load_or_download_card_back
 import collections
 import json
 import requests
@@ -772,29 +773,7 @@ class StarPainterWidget(QWidget):
         painter.end()
 
 
-def load_or_download_card_back(back_path: Path) -> QPixmap:
-    # すでに存在する場合
-    if back_path.exists():
-        return QPixmap(str(back_path))
 
-    back_path.parent.mkdir(parents=True, exist_ok=True)
-
-    url = "https://cards.scryfall.io/back.png"
-
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-
-        with back_path.open("wb") as f:
-            f.write(response.content)
-
-        print(f"[INFO] Card back image downloaded: {back_path}")
-
-    except Exception as e:
-        print(f"[ERROR] Could not download card back: {e}")
-        return QPixmap(":/fallback/back.png")  # 内蔵画像などに切替可能
-
-    return QPixmap(str(back_path))
 
 
 class HandSizeBarWidget(QWidget):

@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFileDialog, QTextBrowser, QComboBox,
     QSplitter, QSpinBox, QDialog, QProgressBar, QSizePolicy,
-    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea
+    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea, QMainWindow
 )
 from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer, QSortFilterProxyModel
 from image_selector import ImageSelectDialog
@@ -36,12 +36,14 @@ from play_window import PlayWindow
 from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
 from common_func import strip_ruby, mana_symbol_to_filename, app_dir, exe_dir
 from deck_building_window import DeckBuildingWindow
+from test_play_window import TestPlayWindow
 
 import mulligan_simulator
 
 import os
 import logging
 import platform
+from typing import List, Dict
 
 # ==== Safeguard for stdout / stderr ====
 if sys.stdout is None:
@@ -57,6 +59,8 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 import logging
 
 DEBUG_LOG = False
+DEBUG_MODE = True
+
 
 def setup_logging():
     log_dir = (
@@ -228,6 +232,7 @@ class ManaCostWidget(QWidget):
         layout.setSpacing(4)
         layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
+        dpr = self.devicePixelRatioF()
         for sym in parse_mana_cost(mana_cost):
             fn = mana_symbol_to_filename(sym)
             path = EMOJI_DIR / fn
@@ -237,13 +242,15 @@ class ManaCostWidget(QWidget):
             label = QLabel()
             pix = QPixmap(str(path))
             if not pix.isNull():
+                scaled_size = int(22 * dpr)
                 label.setPixmap(
                     pix.scaled(
-                        22, 22,
+                        scaled_size, scaled_size,
                         Qt.KeepAspectRatio,
                         Qt.SmoothTransformation
                     )
                 )
+                label.pixmap().setDevicePixelRatio(dpr)
                 layout.addWidget(label)
 
 
@@ -291,6 +298,94 @@ class ProgressDialog(QDialog):
             self.label.setText(text)
         QApplication.processEvents()
 
+
+
+def get_mana_value(mana_cost: str) -> int:
+    """Calculates mana value (CMC) from a mana cost string like {2}{G}{G}."""
+    if not mana_cost:
+        return 0
+    # Remove braces
+    content = mana_cost.replace("{", "").replace("}", " ").strip()
+    # Split by space
+    parts = content.split()
+    total = 0
+    for p in parts:
+        if p.isdigit():
+            total += int(p)
+        elif p in ("X", "Y", "Z"):
+            total += 0
+        else:
+            # Most symbols like G, U, R, B, W, C, S count as 1
+            # Hybrid mana {G/U} or Phyrexian {G/P} also count as 1 mana value
+            # Split by '/' if needed, but normally each group of braces is 1 mana value
+            total += 1
+    return total
+
+def sort_cards(cards: List[Dict]) -> List[Dict]:
+    """
+    Sorts cards according to the following priority:
+    1. Commander A
+    2. Commander B
+    3. Companion
+    4. Mainboard (Creature -> Spell -> Land)
+       - Within Mainboard: CMC (asc), then Name (asc)
+    """
+    if not cards:
+        return []
+
+    # Separate cards into categories
+    comm_a = []
+    comm_b = []
+    comp = []
+    creatures = []
+    instants = []
+    sorceries = []
+    enchantments = []
+    artifacts = []
+    planeswalkers = []
+    battles = []
+    lands = []
+
+    for c in cards:
+        if c.get("Commander_A"):
+            comm_a.append(c)
+        elif c.get("Commander_B"):
+            comm_b.append(c)
+        elif c.get("Companion"):
+            comp.append(c)
+        else:
+            tl = c.get("type_front", "").lower()
+            if "land" in tl:
+                lands.append(c)
+            elif "creature" in tl:
+                creatures.append(c)
+            elif "instant" in tl:
+                instants.append(c)
+            elif "sorcery" in tl:
+                sorceries.append(c)
+            elif "enchantment" in tl:
+                enchantments.append(c)
+            elif "artifact" in tl:
+                artifacts.append(c)
+            elif "planeswalker" in tl:
+                planeswalkers.append(c)
+            elif "battle" in tl:
+                battles.append(c)
+            else:
+                sorceries.append(c) # Fallback for other spells
+
+    # Sort each category (except commanders/companion which are usually singletons)
+    def sub_sort_key(card):
+        mv = get_mana_value(card.get("mana_cost", ""))
+        cost_str = card.get("mana_cost", "")
+        name = card.get("name_en", "").lower()
+        return (mv, cost_str, name)
+
+    for cat_list in [creatures, instants, sorceries, enchantments, artifacts, planeswalkers, battles, lands]:
+        cat_list.sort(key=sub_sort_key)
+
+    return (comm_a + comm_b + comp + creatures + instants + sorceries + 
+            enchantments + artifacts + planeswalkers + battles + lands)
 
 # ================= CardListItem =================
 
@@ -409,6 +504,19 @@ class MainWindow(QWidget):
             QPushButton:hover { background-color: #4d4d4d; }
         """)
 
+
+        self.btn_test_play = QPushButton(UI_TEXT[self.language]["launch_test_play"])
+        self.btn_test_play.clicked.connect(self.launch_test_play)
+        self.btn_test_play.setStyleSheet("""
+            QPushButton {
+                background-color: #3d3d3d;
+                color: #ff5555;
+                font-weight: bold;
+                border: 1px solid #ff5555;
+            }
+            QPushButton:hover { background-color: #4d4d4d; }
+        """)
+
         self.btn_txt = QPushButton(UI_TEXT[self.language]["generate_fm_txt"])
         self.btn_csv = QPushButton(UI_TEXT[self.language]["load_csv"])
         self.btn_txt.clicked.connect(self.generate_from_txt)
@@ -438,6 +546,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.reset_btn)
         layout.addWidget(self.mulligan_btn)
         layout.addWidget(self.btn_deck_building)
+        layout.addWidget(self.btn_test_play)
         layout.addSpacing(20)
         layout.addWidget(self.font_size_label)
         layout.addWidget(self.font_size)
@@ -451,6 +560,19 @@ class MainWindow(QWidget):
         self.play = PlayWindow(self.image_dir, self.language)
         self.play.show()
 
+        if DEBUG_MODE:
+            QTimer.singleShot(100, self.load_debug_csv)
+
+    def load_debug_csv(self):
+        # Using the relative path provided by the user
+        debug_csv = Path(__file__).parent / "../../Toph, the First Metalbender_images/Toph, the First Metalbender.csv"
+        if debug_csv.exists():
+            logging.info(f"DEBUG_MODE: Loading default CSV: {debug_csv}")
+            self.load_csv(debug_csv, debug_csv.parent)
+        else:
+            logging.warning(f"DEBUG_MODE: File not found: {debug_csv}")
+
+
     def retranslate_ui(self):
         lang = self.language
 
@@ -460,12 +582,82 @@ class MainWindow(QWidget):
         self.reset_btn.setText(UI_TEXT[lang]["reset"])
         self.mulligan_btn.setText(UI_TEXT[lang]["mulligan_simulator"])
         self.btn_deck_building.setText(UI_TEXT[lang]["deck_building"])
+        self.btn_test_play.setText(UI_TEXT[lang]["launch_test_play"])
         self.commander_a_btn.setText(UI_TEXT[lang]["commander_a"])
         self.commander_b_btn.setText(UI_TEXT[lang]["commander_b"])
         self.companion_btn.setText(UI_TEXT[lang]["companion"])
 
-        self.font_size_label.setText(UI_TEXT[lang]["text_size"])
         self.type_filter_label.setText(UI_TEXT[lang]["type_filter"])
+        self.font_size_label.setText(UI_TEXT[lang]["text_size"])
+        self.camera_chk.setText(UI_TEXT[lang]["camera_mode"])
+
+    def load_csv_direct(self):
+        base = exe_dir()
+        dialog = QFileDialog(self, "Select CSV", str(base), "CSV (*.csv)")
+        dialog.setOption(QFileDialog.DontUseNativeDialog) # Required on Windows for ProxyModel
+        
+        # Style the dialog for dark mode (non-native dialog inherits QWidget style but headers can be tricky)
+        dialog.setStyleSheet(f"""
+            QFileDialog {{
+                background-color: #222;
+            }}
+            QTreeView, QListView {{
+                background-color: #111;
+                color: white;
+            }}
+            QHeaderView::section {{
+                background-color: #333;
+                color: white;
+                padding: 4px;
+                border: 1px solid #444;
+            }}
+            QLineEdit {{
+                background-color: #111;
+                color: white;
+                border: 1px solid #555;
+            }}
+        """)
+
+        proxy = CSVFilterProxyModel(self)
+        dialog.setProxyModel(proxy)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                csv_path = files[0]
+                self.load_csv(Path(csv_path), Path(csv_path).parent)
+
+    def launch_deck_building(self):
+        if not self.csv_path:
+             QMessageBox.warning(self, "Warning", "Please load CSV first.")
+             return
+        
+        # Pass loaded cards to DeckBuildingWindow
+        # Note: DeckBuildingWindow expects cards list similar to what we have?
+        # Actually DeckBuildingWindow loads built deck from somewhere?
+        # No, user wants to build deck. 
+        # But wait, logic for DeckBuildingWindow?
+        # Let's check DeckBuildingWindow init.
+        # It usually takes parent and maybe existing deck?
+        # In current code (that I didn't fully read), let's assume it works.
+        
+        # User request: "Test Play window uses loaded CSV."
+        
+        # For simplicity, relaunch DeckBuildingWindow logic if needed, but I am adding TestPlay launch here.
+        
+        win = DeckBuildingWindow(self.csv_path, self.language, self)
+        win.show()
+
+    def launch_test_play(self):
+        if not self.csv_path:
+             QMessageBox.warning(self, "Warning", "Please load CSV first.")
+             return
+             
+        # Create TestPlayWindow
+        # Pass self.cards (loaded csv content)
+        deck_name = self.csv_path.stem
+        self.test_play_window = TestPlayWindow(self.cards, deck_name, self.language)
+        self.test_play_window.show()
 
     def toggle_camera(self, state):
         if state == Qt.Checked:
@@ -532,11 +724,27 @@ class MainWindow(QWidget):
         # Current language
         lang = self.language
 
+        # Get card for role check
+        idx = self.filtered_indices[self.list.row(item)]
+        card = self.cards[idx]
+        
+        label_a = "unset_commander_a" if card.get("Commander_A") else "set_commander_a"
+        label_b = "unset_commander_b" if card.get("Commander_B") else "set_commander_b"
+        label_comp = "unset_companion" if card.get("Companion") else "set_companion"
+
         # create right click menu
         action_image = menu.addAction(UI_TEXT[lang]["select_image"])
-        action_commander_a = menu.addAction(UI_TEXT[lang]["set_commander_a"])
-        action_commander_b = menu.addAction(UI_TEXT[lang]["set_commander_b"])
-        action_companion = menu.addAction(UI_TEXT[lang]["set_companion"])
+        action_commander_a = menu.addAction(UI_TEXT[lang][label_a])
+        action_commander_b = menu.addAction(UI_TEXT[lang][label_b])
+        action_companion = menu.addAction(UI_TEXT[lang][label_comp])
+        
+        # Multiple Illustrations for Basic Lands
+        action_add_illustration = None
+        idx = self.filtered_indices[self.list.row(item)]
+        card = self.cards[idx]
+        if "Basic Land" in card.get("type_front", ""):
+            menu.addSeparator()
+            action_add_illustration = menu.addAction(UI_TEXT[lang]["add_different_illustration"])
 
         action = menu.exec_(self.list.mapToGlobal(pos))
         if not action:
@@ -545,6 +753,8 @@ class MainWindow(QWidget):
         # actions
         if action == action_image:
             self.open_image_selector(item)
+        elif action == action_add_illustration:
+            self.open_image_selector_for_new_illustration(item)
         elif action == action_commander_a:
             self.set_commander(item, "Commander_A")
         elif action == action_commander_b:
@@ -555,51 +765,31 @@ class MainWindow(QWidget):
 
     def set_commander(self, item, column):
         """
-        Set Commander A / B or Companion
+        Set Commander A / B or Companion.
+        Unsets the same column for all other cards.
         """
         idx = self.filtered_indices[self.list.row(item)]
-        card = self.cards[idx]
+        target_card = self.cards[idx]
 
-        # choose card name
-        card[column] = card["name_ja"] if self.language == "ja" else card["name_en"]
+        # Check if already set
+        is_already_set = bool(target_card.get(column))
 
-        # reflect to csv
+        # Reset the column for all cards first
+        for c in self.cards:
+            c[column] = ""
+
+        if not is_already_set:
+            # Set for the target card
+            target_card[column] = target_card["name_ja"] if self.language == "ja" else target_card["name_en"]
+
+        # Reflect to csv (this will also sort them, potentially moving the card to top)
         self.save_current_csv()
+        
+        # Refresh the list to show new order if needed
+        self.apply_filter()
 
-
-    def save_current_csv(self):
-        """
-        Save the current card data to CSV
-        """
-        if not self.csv_path or not self.cards:
-            return
-
-        fieldnames = [
-            "card_file_front",
-            "card_file_back",
-            "name_front",
-            "name_back",
-            "name_ja",
-            "name_en",
-            "type_front",
-            "type_back",
-            "mana_cost",
-            "text_front_ja",
-            "text_front_en",
-            "text_back_ja",
-            "text_back_en",
-            "Commander_A",
-            "Commander_B",
-            "Companion",
-        ]
-
-        try:
-            with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_ALL, extrasaction='ignore')
-                writer.writeheader()
-                writer.writerows(self.cards)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save the CSV file:\n{e}")
+        # Show the updated card in the preview panel
+        self.show_commander(column)
 
 
     def generate_from_txt(self):
@@ -650,42 +840,6 @@ class MainWindow(QWidget):
         if csv_path:
             self.load_csv(csv_path, out)
 
-    def load_csv_direct(self):
-        base = exe_dir()
-        dialog = QFileDialog(self, "Select CSV", str(base), "CSV (*.csv)")
-        dialog.setOption(QFileDialog.DontUseNativeDialog) # Required on Windows for ProxyModel
-        
-        # Style the dialog for dark mode (non-native dialog inherits QWidget style but headers can be tricky)
-        dialog.setStyleSheet(f"""
-            QFileDialog {{
-                background-color: #222;
-            }}
-            QTreeView, QListView {{
-                background-color: #111;
-                color: white;
-            }}
-            QHeaderView::section {{
-                background-color: #333;
-                color: white;
-                padding: 4px;
-                border: 1px solid #444;
-            }}
-            QLineEdit {{
-                background-color: #111;
-                color: white;
-                border: 1px solid #555;
-            }}
-        """)
-
-        proxy = CSVFilterProxyModel(self)
-        dialog.setProxyModel(proxy)
-        
-        if dialog.exec_() == QDialog.Accepted:
-            files = dialog.selectedFiles()
-            if files:
-                csv_path = files[0]
-                self.load_csv(Path(csv_path), Path(csv_path).parent)
-
     def load_csv(self, csv_path: Path, image_dir: Path):
         self.csv_path = csv_path 
         self.cards.clear()
@@ -700,9 +854,13 @@ class MainWindow(QWidget):
             temp_cards = list(csv.DictReader(f))
 
         if temp_cards:
-            # Migration detection: if 'type_front' is missing, it's old schema
+            # Migration detection: 
+            # 1. Old schema check (missing type_front)
+            # 2. Missing count column check
+            needs_save = False
+            
             if temp_cards[0].get("type_front") is None:
-                logging.info(f"Migrating legacy CSV: {csv_path}")
+                logging.info(f"Migrating legacy CSV (type schema): {csv_path}")
                 for c in temp_cards:
                     old_type = c.get("type", "")
                     if " // " in old_type:
@@ -712,16 +870,28 @@ class MainWindow(QWidget):
                     else:
                         c["type_front"] = old_type
                         c["type_back"] = ""
-                    # Remove old key
                     if "type" in c:
                         del c["type"]
-                
-                # Resave new schema immediately
-                self.cards = temp_cards
-                self.save_current_csv()
-            else:
-                self.cards = temp_cards
+                needs_save = True
 
+            if temp_cards[0].get("count") is None:
+                logging.info(f"Migrating CSV (adding count): {csv_path}")
+                for c in temp_cards:
+                    c["count"] = "1" # CSV values are strings
+                needs_save = True
+
+            if temp_cards[0].get("is_token") is None:
+                logging.info(f"Migrating CSV (adding is_token): {csv_path}")
+                for c in temp_cards:
+                    c["is_token"] = "False"
+                needs_save = True
+
+            # Sort cards before assigning to self.cards
+            temp_cards = sort_cards(temp_cards)
+            self.cards = temp_cards
+            
+            if needs_save:
+                self.save_current_csv()
 
         self.apply_filter()
         if self.cards:
@@ -736,6 +906,10 @@ class MainWindow(QWidget):
         selected_type = self.type_filter.currentData()
 
         for i, c in enumerate(self.cards):
+            # Exclude tokens from the main list view
+            if c.get("is_token") == "True":
+                continue
+
             # Use 'type_front' for filtering
             type_line = c.get("type_front", "")
             main_types_part = type_line.split(" — ")[0]
@@ -789,7 +963,28 @@ class MainWindow(QWidget):
 
     def select_card(self, item):
         idx = self.filtered_indices[self.list.row(item)]
-        self.play.show_card(self.cards[idx])
+        selected_card = self.cards[idx]
+        stack = self.get_special_stack(selected_card)
+        self.play.show_card(selected_card, stack_cards=stack)
+
+    def get_special_stack(self, card):
+        """Helper to find all special cards (Comm A, B, Comp) and return as a list."""
+        is_special = card.get("Commander_A") or card.get("Commander_B") or card.get("Companion")
+        if not is_special:
+            return None
+
+        stack = []
+        seen_ids = set()
+        for col in ["Commander_A", "Commander_B", "Companion"]:
+            for c in self.cards:
+                if c.get(col):
+                    # Use front file as a unique-ish ID for the actual image entity
+                    cid = c.get("card_file_front")
+                    if cid not in seen_ids:
+                        stack.append(c)
+                        seen_ids.add(cid)
+                    break
+        return stack
 
     def change_text_size(self, size):
         self.play.set_text_font_size(size)
@@ -828,7 +1023,8 @@ class MainWindow(QWidget):
                 )
                 return
 
-        self.play.show_card(card_to_show)
+        stack = self.get_special_stack(card_to_show)
+        self.play.show_card(card_to_show, stack_cards=stack)
 
 
     def reset_counters(self):
@@ -866,19 +1062,43 @@ class MainWindow(QWidget):
         self.deck_building_win.data_changed.connect(self.apply_filter)
         self.deck_building_win.show()
 
+    def launch_test_play(self):
+        if not self.csv_path:
+             QMessageBox.warning(self, "Warning", "Please load CSV first.")
+             return
+             
+        # Create TestPlayWindow
+        deck_name = self.csv_path.stem
+        self.test_play_window = TestPlayWindow(self.cards, deck_name, self.language, image_root=self.csv_path.parent, csv_path=self.csv_path)
+        self.test_play_window.show()
+
+
     def open_image_selector(self, item):
         idx = self.filtered_indices[self.list.row(item)]
         card = self.cards[idx]
         image_path = self.image_dir / card["card_file_front"]
         card_name = card["name_en"]
+        is_token = (str(card.get("is_token")) == "True")
 
-        dlg = ImageSelectDialog(card_name, image_path, self)
+        dlg = ImageSelectDialog(card_name, image_path, self, is_token=is_token)
         if dlg.exec_():
             face = dlg.selected_face
+            oid = face.get("oracle_id")
+            
+            # If it's a token, enforce the unique name-ID filename
+            if is_token and oid:
+                card["oracle_id"] = oid # Sync metadata
+                short_oid = f"_{oid[:8]}"
+                safe_name = generator.safe_filename(card["name_en"])
+                card["card_file_front"] = f"{safe_name}{short_oid}_front.jpg"
+                if card.get("card_file_back"):
+                     card["card_file_back"] = f"{safe_name}{short_oid}_back.jpg"
+
             front_path = self.image_dir / card["card_file_front"]
-            back_path = (self.image_dir / card["card_file_back"]) if card["card_file_back"] else None
+            back_path = (self.image_dir / card["card_file_back"]) if card.get("card_file_back") else None
 
             # Download selected face
+            import requests
             data = requests.get(face["image_normal"], timeout=5).content
             if face["face_index"] == 0:
                 front_path.write_bytes(data)
@@ -899,8 +1119,98 @@ class MainWindow(QWidget):
                             front_path.write_bytes(other_data)
                         break
 
+            self.save_current_csv()
             QMessageBox.information(self, "Done", "Card images updated.")
             self.play._update()
+
+    def open_image_selector_for_new_illustration(self, item):
+        idx = self.filtered_indices[self.list.row(item)]
+        card = self.cards[idx]
+        card_name = card["name_en"]
+        image_dir = self.image_dir
+
+        # We don't have a specific path yet, just a name
+        dlg = ImageSelectDialog(card_name, image_dir / card["card_file_front"], self)
+        if dlg.exec_():
+            face = dlg.selected_face
+            
+            # 1. Generate unique filename
+            base_name = card["card_file_front"]  # e.g., Forest_front.jpg
+            stem = Path(base_name).stem
+            ext = Path(base_name).suffix
+            
+            # Remove existing numbering if any? 
+            # User said "Forest_front_2.jpg" if original is "Forest_front.jpg".
+            # Let's check stem and increment.
+            
+            def get_next_filename(dir_path, base_stem, extension):
+                counter = 2
+                while True:
+                    candidate = f"{base_stem}_{counter}{extension}"
+                    if not (dir_path / candidate).exists():
+                        return candidate
+                    counter += 1
+            
+            new_filename = get_next_filename(image_dir, stem, ext)
+            new_path = image_dir / new_filename
+            
+            # 2. Download and save
+            try:
+                data = requests.get(face["image_normal"], timeout=5).content
+                new_path.write_bytes(data)
+                
+                # 3. Create new card entry
+                new_card = card.copy()
+                new_card["card_file_front"] = new_filename
+                new_card["count"] = "1" # Default to 1 for new illustration
+                
+                # Add to self.cards
+                self.cards.append(new_card)
+                
+                # 4. Save CSV
+                self.save_current_csv()
+                
+                # 5. Refresh
+                QMessageBox.information(self, "Done", f"Added new illustration: {new_filename}")
+                self.apply_filter()
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to download image: {e}")
+
+    def save_current_csv(self):
+        if not self.csv_path or not self.cards:
+            return
+        
+        # 1. Gather all keys from current cards
+        all_card_keys = set()
+        for c in self.cards:
+            all_card_keys.update(c.keys())
+
+        # 2. Get existing fieldnames to maintain order if possible
+        fieldnames = []
+        try:
+            if self.csv_path.exists():
+                with self.csv_path.open("r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    fieldnames = reader.fieldnames or []
+        except:
+            pass
+
+        # 3. Ensure all keys from data are in fieldnames
+        for k in sorted(all_card_keys):
+            if k not in fieldnames:
+                fieldnames.append(k)
+
+        # 4. Filter fieldnames to only those actually present in current data
+        final_fieldnames = [f for f in fieldnames if f in all_card_keys]
+
+        # Sort cards before saving
+        self.cards = sort_cards(self.cards)
+
+        with self.csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=final_fieldnames, quoting=csv.QUOTE_ALL)
+            writer.writeheader()
+            writer.writerows(self.cards)
 
 
 

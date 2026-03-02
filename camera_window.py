@@ -242,7 +242,8 @@ class CameraWindow(QWidget):
         self.vote_window = 10
         self.vote_buffer = deque(maxlen=self.vote_window)
         self.current_card = None    # Result of majority voting
-        self.display_card = None    # Currently displayed card
+        self.display_card = None    # Currently displayed card name
+        self.best_card_for_name = {} # name -> card object (most recent best match)
 
         self.metric_loaded = False
         self.metric_loading = False
@@ -758,7 +759,16 @@ class CameraWindow(QWidget):
                         best_metric_name = name
 
                 if best_metric_name is not None:
-                    final_card = {"name_en": best_metric_name}
+                    # Metric said this card name is best
+                    # We should find the specific illustration of this name that CLIP liked best
+                    # (Clip's top_cards has specifically ranked entries)
+                    for c_entry in top_cards:
+                        if c_entry["card"]["name_en"] == best_metric_name:
+                            final_card = c_entry["card"]
+                            break
+                    else:
+                        final_card = {"name_en": best_metric_name}
+
                     final_score = best_metric_score
 
 
@@ -775,6 +785,9 @@ class CameraWindow(QWidget):
                 # Advanced OFF → decide using CLIP score
                 if final_card is not None and final_score >= CLIP_SCORE_TH:
                     self.vote_buffer.append(final_card["name_en"])
+                    # Keep track of which specific illustration matched best for this name
+                    if "front" in final_card: # Real card entry
+                        self.best_card_for_name[final_card["name_en"]] = final_card
 
 
 
@@ -794,10 +807,14 @@ class CameraWindow(QWidget):
                     self.cardDetected.emit(self.current_card)
 
                     # ---- Update displayed image ----
-                    voted_card = next(
-                        (c for c in self.deck_features if c["name_en"] == self.current_card),
-                        None
-                    )
+                    voted_card = self.best_card_for_name.get(self.current_card)
+                    
+                    # Fallback if somehow not in cache
+                    if not voted_card:
+                        voted_card = next(
+                            (c for c in self.deck_features if c["name_en"] == self.current_card),
+                            None
+                        )
                     if voted_card:
                         face = voted_card.get("front")
                         if face:

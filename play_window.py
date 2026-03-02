@@ -6,9 +6,9 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QTextBrowser, QSplitter, QSizePolicy, QFrame, QScrollArea
 )
-from PyQt5.QtCore import Qt, QPoint, QUrl, QTimer, QDateTime
+from PyQt5.QtCore import Qt, QPoint, QUrl, QTimer, QDateTime, QRectF
 from PyQt5.QtGui import (
-    QTextDocument, QPixmap, QFont    
+    QTextDocument, QPixmap, QFont, QPainter, QPainterPath, QColor
 )
 from PyQt5.QtCore import pyqtSignal
 import re
@@ -28,7 +28,7 @@ PHYREXIAN_MAP = {
     "(g/p)": "{G/P}",
 }
 
-def mana_text_to_html(text: str, doc: QTextDocument, size_px: int, align_middle=False) -> str:
+def mana_text_to_html(text: str, doc: QTextDocument, size_px: int, align_middle=False, dpr=1.0) -> str:
     if not text:
         return ""
 
@@ -45,11 +45,13 @@ def mana_text_to_html(text: str, doc: QTextDocument, size_px: int, align_middle=
         if pix.isNull():
             return match.group(0)
 
+        scaled_size = int(size_px * dpr)
         pix = pix.scaled(
-            size_px, size_px,
+            scaled_size, scaled_size,
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
+        pix.setDevicePixelRatio(dpr)
 
         url = QUrl(f"mana:{sym}")
         doc.addResource(QTextDocument.ImageResource, url, pix)
@@ -106,6 +108,83 @@ def normalize_mana_text(text: str) -> str:
 
 
 
+class RoundedImageWidget(QWidget):
+    """Custom widget for showing one or multiple card images with rounded corners."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pixmaps = []
+        self.selected_index = 0
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
+    def setPixmap(self, pixmap):
+        """Legacy support for a single pixmap."""
+        self.setPixmaps([pixmap], 0)
+
+    def setPixmaps(self, pixmaps, selected_index=0):
+        """Set a list of pixmaps to show as a stack."""
+        self.pixmaps = [p for p in pixmaps if p and not p.isNull()]
+        self.selected_index = selected_index
+        self.update()
+
+    def paintEvent(self, event):
+        if not self.pixmaps:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        n = len(self.pixmaps)
+        
+        # We need to draw the selected one last. 
+        # Refined logic: if B (index 1) is not selected, make it the second-to-last drawn (middle).
+        others = [i for i in range(n) if i != self.selected_index]
+        if len(others) == 2:
+            if 1 in others:
+                # 1 is B. Position it behind selected card but in front of the other.
+                other_idx = others[0] if others[1] == 1 else others[1]
+                draw_order = [other_idx, 1]
+            else:
+                # 1 (B) is selected. We have 0 (A) and 2 (Comp).
+                # Default to A in middle (back: Comp, middle: A, front: B)
+                draw_order = [2, 0]
+        else:
+            draw_order = others
+
+        if self.selected_index < n:
+            draw_order.append(self.selected_index)
+
+        radius = 13.0
+
+        for i in draw_order:
+            pix = self.pixmaps[i]
+            # Calculate fitting rect
+            pix_size = pix.size() / pix.devicePixelRatio()
+            target_size = pix_size.scaled(self.size(), Qt.KeepAspectRatio)
+            
+            card_w = target_size.width()
+            card_h = target_size.height()
+
+            # Horizontal distribution
+            if n <= 1:
+                x = (self.width() - card_w) / 2
+            else:
+                # Distribute evenly from 0 to (width - card_w)
+                # This ensures edges stay within bounds.
+                max_x = self.width() - card_w
+                x = i * (max_x / (n - 1))
+
+            y = (self.height() - card_h) / 2
+            rect = QRectF(x, y, card_w, card_h)
+
+            painter.save()
+            path = QPainterPath()
+            path.addRoundedRect(rect, radius, radius)
+            painter.setClipPath(path)
+            painter.drawPixmap(rect.toRect(), pix)
+            painter.restore()
+
 # ================= PlayWindow =================
 
 class PlayWindow(QWidget):
@@ -137,7 +216,7 @@ class PlayWindow(QWidget):
         self.pending_deltas = collections.defaultdict(int)
         self.log_timer = QTimer(self)
         self.log_timer.setSingleShot(True)
-        self.log_timer.setInterval(5000)
+        self.log_timer.setInterval(1000)
         self.log_timer.timeout.connect(self.commit_log)
         self.log_popup = None
 
@@ -150,9 +229,7 @@ class PlayWindow(QWidget):
         self.card_title.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
 
-        self.image = QLabel(alignment=Qt.AlignCenter)
-        self.image.setMinimumSize(0, 0)
-        self.image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.image = RoundedImageWidget()
         self.image.installEventFilter(self)
 
         self.text = QTextBrowser()
@@ -222,8 +299,9 @@ class PlayWindow(QWidget):
             self.log_popup.refresh()
 
 
-    def show_card(self, card: dict):
+    def show_card(self, card: dict, stack_cards: list = None):
         self.card = card
+        self.stack_cards = stack_cards
         self.face = "front"
         self.flip_btn.setEnabled(bool(card.get("card_file_back")))
         self._update()
@@ -238,43 +316,54 @@ class PlayWindow(QWidget):
         mana_cost = self.card.get("mana_cost", "")
         doc_title = self.card_title.document()
         doc_title.clear()
+        dpr = self.devicePixelRatioF()
         html_title = f"""
         <html>
         <body style="font-size:16pt; color:white; margin:0; padding:0; text-align:left;">
-            {card_name}&nbsp;&nbsp;{mana_text_to_html(mana_cost, doc_title, 22, align_middle=True)}
+            {card_name}&nbsp;&nbsp;{mana_text_to_html(mana_cost, doc_title, 22, align_middle=True, dpr=dpr)}
         </body>
         </html>
         """
 
         self.card_title.setHtml(html_title)
 
-        fn = (
-                    self.card["card_file_front"]
+        # Image handling
+        if hasattr(self, "stack_cards") and self.stack_cards:
+            pixmaps = []
+            selected_idx = 0
+            for sc in self.stack_cards:
+                sc_fn = (
+                    sc["card_file_front"]
                     if self.face == "front"
-                    else self.card["card_file_back"]
+                    else sc.get("card_file_back", sc["card_file_front"])
                 )
+                img_path = self.image_dir / sc_fn
+                if img_path.exists():
+                    p = QPixmap(str(img_path))
+                    if not p.isNull():
+                        pixmaps.append(p)
+                        if sc is self.card:
+                            selected_idx = len(pixmaps) - 1
+            self.image.setPixmaps(pixmaps, selected_idx)
+        else:
+            fn = (
+                        self.card["card_file_front"]
+                        if self.face == "front"
+                        else self.card["card_file_back"]
+                    )
+            img = self.image_dir / fn
+            if img.exists():
+                pix = QPixmap(str(img))
+                if not pix.isNull():
+                    self.image.setPixmap(pix)
 
         lang = self.language
-
         key = (
             f"text_front_{lang}"
             if self.face == "front"
             else f"text_back_{lang}"
         )
-
         text = self.card.get(key, "")
-
-        img = self.image_dir / fn
-        if img.exists():
-            pix = QPixmap(str(img))
-            if not pix.isNull():
-                self.image.setPixmap(
-                    pix.scaled(
-                        self.image.size(),
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation
-                    )
-                )
 
         font_pt = self.text_font.pointSize()
         icon_px = int(font_pt * 1.5)   
@@ -289,7 +378,7 @@ class PlayWindow(QWidget):
             line-height:1.4;
             color:white;
         ">
-        {mana_text_to_html(text, doc, icon_px, align_middle=True)}
+        {mana_text_to_html(text, doc, icon_px, align_middle=True, dpr=dpr)}
         </body>
         </html>
         """

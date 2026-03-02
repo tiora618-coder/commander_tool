@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 import re
+import requests
+from PyQt5.QtGui import QPixmap
 
 def app_dir() -> Path:
     # One-file: use the temporary MEIPASS directory
@@ -38,3 +40,26 @@ def mana_symbol_to_filename(sym: str):
 
     return f"mana-{sym.lower().replace('/', '')}.png"
 
+def load_or_download_card_back(back_path: Path) -> QPixmap:
+    # すでに存在する場合
+    if back_path.exists():
+        return QPixmap(str(back_path))
+
+    back_path.parent.mkdir(parents=True, exist_ok=True)
+
+    url = "https://cards.scryfall.io/back.png"
+
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+
+        with back_path.open("wb") as f:
+            f.write(response.content)
+
+        print(f"[INFO] Card back image downloaded: {back_path}")
+
+    except Exception as e:
+        print(f"[ERROR] Could not download card back: {e}")
+        return QPixmap(":/fallback/back.png")  # 内蔵画像などに切替可能
+
+    return QPixmap(str(back_path))

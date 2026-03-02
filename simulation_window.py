@@ -5,28 +5,35 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QScrollArea, QMessageBox, QInputDialog, QDialog
 )
-from PyQt5.QtCore import Qt, QPropertyAnimation, QPoint, QEasingCurve, QTimer
+from PyQt5.QtCore import Qt, QPropertyAnimation, QPoint, QEasingCurve, QTimer, pyqtSignal
+
 from PyQt5.QtGui import QPixmap
 from star_rating_widget import StarRatingWidget
 
 from card_widget import CardWidget
 from logger import append_mulligan_log
 from gui_language import UI_TEXT, LANG_EN, LANG_JA
+import logging
 
 
 class SimulationWindow(QWidget):
-    def __init__(self, deck, deck_name, language, csv_path, parent=None, initial_run_count=0):
+    finished_mulligan = pyqtSignal(list, list, list) # (hand, exiled, bottom)
+
+    def __init__(self, deck, deck_name, language, csv_path, parent=None, initial_run_count=0, is_setup_mode=False):
         super().__init__()
         self.csv_path = Path(csv_path) 
+        self.is_setup_mode = is_setup_mode
 
         self.parent_window = parent  # reference to StartWindow
-        for card in deck:
-            print(card)  # これを追加
 
-        self.initial_library = [
-            card for card in deck
-            if not (card.get("Commander_A") or card.get("Commander_B") or card.get("Companion"))
-        ]
+        self.initial_library = []
+        for card in deck:
+            if not (card.get("Commander_A") or card.get("Commander_B") or card.get("Companion")):
+                count = int(card.get("count", 1))
+                for _ in range(count):
+                    self.initial_library.append(card)
+        
+        logging.info(f"SimulationWindow: Library size expanded to {len(self.initial_library)}")
         self.deck = list(self.initial_library)
         self.animations = []
         self.deck_name = deck_name
@@ -270,7 +277,25 @@ class SimulationWindow(QWidget):
             )
             return
 
+        if self.is_setup_mode:
+            # In setup mode, we don't log to JSON or require rating.
+            # Filter out the cards selected for bottom
+            final_hand = list(self.current_hand)
+            bottom_cards = []
+            for rid in self.return_selected:
+                # Remove first occurrence of this card ID
+                for i, card in enumerate(final_hand):
+                    if card["id"] == rid:
+                        bottom_cards.append(final_hand.pop(i))
+                        break
+            
+            # Return the result and close.
+            self.finished_mulligan.emit(final_hand, self.exiled_cards, bottom_cards)
+            self.close()
+            return
+
         # 2) Show star rating dialog
+
         rating_dialog = QDialog(self)
         rating_dialog.setWindowTitle("Rate Hand")
         layout = QVBoxLayout()

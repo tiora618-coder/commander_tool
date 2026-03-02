@@ -1,7 +1,8 @@
-# card_widget.py
-from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRectF
+from PyQt5.QtGui import QPixmap, QPainterPath, QRegion, QPainter, QColor, QFont
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton, QGraphicsOpacityEffect
+
+
 
 
 class CardWidget(QWidget):
@@ -13,33 +14,17 @@ class CardWidget(QWidget):
 
         self.card_id = card_id
         self.marked_bottom = False
+        self.is_hovering = False
+        self.pixmap = None
 
-        # Image label
-        self.img_label = QLabel()
         pix = QPixmap(str(img_path))
         if not pix.isNull():
-            self.img_label.setPixmap(pix.scaledToHeight(300, Qt.SmoothTransformation))
+            # Support High DPI (e.g. 150% scaling) by pre-scaling to 2x logical size
+            # target logical height is 300, so we scale to 600
+            self.pixmap = pix.scaledToHeight(600, Qt.SmoothTransformation)
+            self.pixmap.setDevicePixelRatio(2.0)
         else:
-            self.img_label.setText("Image Error")
-
-        # Overlay for "BOTTOM"
-        self.overlay = QLabel("BOTTOM", self)
-        self.overlay.setAlignment(Qt.AlignCenter)
-        self.overlay.setStyleSheet(
-            "background-color: rgba(0,0,0,120);"
-            "color: white;"
-            "font-size: 28px;"
-            "font-weight: bold;"
-            "font-family: 'Meiryo UI';"
-        )
-        self.overlay.hide()
-
-        # Overlay for hover effect (darken)
-        self.hover_overlay = QLabel(self)
-        self.hover_overlay.setStyleSheet(
-            "background-color: rgba(0,0,0,80);"
-        )
-        self.hover_overlay.hide()
+            self.pixmap = None
 
         # Serum Powder Button Overlay
         self.btn_serum = QPushButton("Activate", self)
@@ -67,23 +52,15 @@ class CardWidget(QWidget):
         self.pulse_anim.setEndValue(1.0)
         self.pulse_anim.setLoopCount(-1) # Infinite
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.img_label)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(layout)
-
         # Enable mouse tracking for hover events
         self.setMouseTracking(True)
-        self.img_label.setMouseTracking(True)
+        # Transparent background to allow rounded corners with AA
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(214, 300) # Match card ratio appx
 
     # keep overlay size aligned
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.overlay.resize(self.img_label.size())
-        self.overlay.raise_()
-        self.hover_overlay.resize(self.img_label.size())
-        self.hover_overlay.raise_()
-        
         # Center the serum button near the middle-bottom
         btn_w = 170
         btn_h = 36
@@ -95,43 +72,71 @@ class CardWidget(QWidget):
         )
         self.btn_serum.raise_()
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        rect = QRectF(self.rect())
+        radius = 15.0 # Standard MTG corner ratio (7px/140px scaled to 300px height)
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        painter.setClipPath(path)
+
+        # 1. Draw Card Pixmap
+        if self.pixmap:
+            painter.drawPixmap(self.rect(), self.pixmap)
+        else:
+            painter.fillRect(self.rect(), QColor("#333"))
+            painter.setPen(Qt.white)
+            painter.drawText(self.rect(), Qt.AlignCenter, "Image Error")
+
+        # 2. Hover Overlay
+        if self.is_hovering:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
+
+        # 3. Bottom Overlay
+        if self.marked_bottom:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 120))
+            painter.setPen(Qt.white)
+            font = QFont("Meiryo UI", 20, QFont.Bold)
+            painter.setFont(font)
+            painter.drawText(self.rect(), Qt.AlignCenter, "BOTTOM")
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self)
         super().mousePressEvent(event)
 
     def enterEvent(self, event):
-        self.hover_overlay.show()
-        self.hover_overlay.raise_()
-        if self.btn_serum.isVisible():
-            self.btn_serum.raise_()
+        self.is_hovering = True
+        self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.hover_overlay.hide()
+        self.is_hovering = False
+        self.update()
         super().leaveEvent(event)
 
     def set_marked(self, state: bool):
         self.marked_bottom = state
+        self.update()
         if state:
-            self.overlay.show()
-            self.overlay.raise_()
             # Ensure serum button is always on top if it exists
             if self.btn_serum.isVisible():
                 self.btn_serum.raise_()
-        else:
-            self.overlay.hide()
 
     def toggle_bottom_mark(self):
         self.set_marked(not self.marked_bottom)
 
     def start_pulse(self):
-        self.img_label.setGraphicsEffect(self.opacity_effect)
+        self.setGraphicsEffect(self.opacity_effect)
         self.pulse_anim.start()
 
     def stop_pulse(self):
         self.pulse_anim.stop()
-        self.img_label.setGraphicsEffect(None) # Remove effect completely
+        self.setGraphicsEffect(None) # Remove effect completely
 
     def show_serum_button(self, text):
         self.btn_serum.setText(text)

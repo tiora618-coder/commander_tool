@@ -231,16 +231,24 @@ def search_metric_topk(query_feat, metric_features, k=5):
 
 def metric_score_for_card(metric_feat, card_name, metric_features):
     """
-    Returns the metric cosine similarity for the specified card name.
+    Returns the maximum metric cosine similarity for the specified card name
+    across all available entries (supporting multiple illustrations).
     """
+    max_score = -1.0
+    found = False
+    
+    q = metric_feat / np.linalg.norm(metric_feat)
+    
     for c in metric_features:
         if c["name_en"] == card_name:
             f = c["metric_feature"]
             f = f / np.linalg.norm(f)
-            q = metric_feat / np.linalg.norm(metric_feat)
-            return float(np.dot(q, f))
+            score = float(np.dot(q, f))
+            if score > max_score:
+                max_score = score
+            found = True
 
-    return None
+    return max_score if found else None
 
 
 
