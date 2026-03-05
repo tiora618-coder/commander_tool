@@ -1,64 +1,41 @@
 ﻿# main.py
 import sys
+import os
 import csv
 from pathlib import Path
 import re
+import platform
+import logging
+import zipfile
+import io
+import traceback
+import requests
+from typing import List, Dict
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QListWidget, QListWidgetItem,
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QFileDialog, QTextBrowser, QComboBox,
     QSplitter, QSpinBox, QDialog, QProgressBar, QSizePolicy,
-    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea, QMainWindow
+    QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea, QMainWindow,
+    QGraphicsProxyWidget, QGraphicsView, QGraphicsScene
 )
-from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer, QSortFilterProxyModel
-from image_selector import ImageSelectDialog
+from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer, QSortFilterProxyModel, QRunnable, QObject, pyqtSignal, QThreadPool
 from PyQt5.QtGui import (
-    QTextDocument,
-    QPixmap,
-    QFont,
-    QFontMetrics,
-    QIcon,
-    QImage,
-    QPalette,
-    QColor      
+    QTextDocument, QPixmap, QFont, QFontMetrics, QIcon, QImage, QPalette, QColor, QFontInfo
 )
-import requests
-import generator
-from camera_window import CameraWindow
-
-from PyQt5.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool
-
-import zipfile
-import io
-from gui_language import UI_TEXT, TYPE_LABELS
-import traceback
-from play_window import PlayWindow
-from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
-from common_func import strip_ruby, mana_symbol_to_filename, app_dir, exe_dir
-from deck_building_window import DeckBuildingWindow
-from test_play_window import TestPlayWindow
-
-import mulligan_simulator
-
-import os
-import logging
-import platform
-from typing import List, Dict
-
-# ==== Safeguard for stdout / stderr ====
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w")
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w")
 
 # ==== Suppress Hugging Face / tqdm / transformers output ====
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
-import logging
+# V23.1: Heavy modules moved to local imports in the main block to speed up splash display
+from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
+from common_func import strip_ruby, mana_symbol_to_filename, app_dir, exe_dir, set_app_icon, get_app_icon, set_window_icon_win32
+from gui_language import UI_TEXT, TYPE_LABELS
 
-DEBUG_LOG = False
+DEBUG_LOG = True
 DEBUG_MODE = True
 
 
@@ -98,36 +75,7 @@ def setup_logging():
 
 setup_logging()
 
-
 # ================= Common Settings =================
-def get_app_icon():
-    icon_dir = app_dir() / "icons"
-
-    if platform.system() == "Darwin":
-        # macOS
-        return QIcon(str(icon_dir / "commander_tool_icon.icns"))
-    else:
-        # Windows / Linux → ICO を使うのが安全
-        return QIcon(str(icon_dir / "commander_tool_icon.ico"))
-    
-def set_app_icon(window):
-    base = app_dir() / "icons"
-
-    # Select appropriate icon depending on OS
-    if platform.system() == "Windows":
-        # Use .ico for Windows (affects taskbar icon)
-        icon_file = base / "commander_tool_icon.ico"
-    elif platform.system() == "Darwin":
-        # Use .icns for macOS (Dock will automatically use this icon)
-        icon_file = base / "commander_tool_icon_mac.icns"
-    else:
-        # Fallback for Linux or others
-        icon_file = base / "commander_tool_icon.png"
-
-    # Set window icon (Windows taskbar uses this)
-    window.setWindowIcon(QIcon(str(icon_file)))
-
-
 def is_ascii_filename(path: Path) -> bool:
     try:
         path.name.encode("ascii")
@@ -159,6 +107,14 @@ EMOJI_ZIP_URL = (
 )
 
 
+# V23.1: Global placeholders for heavy modules
+generator = None
+CameraWindow = None
+PlayWindow = None
+DeckBuildingWindow = None
+TestPlayWindow = None
+mulligan_simulator = None
+
 def get_display_type(type_line: str, lang: str) -> str:
     if not type_line:
         return ""
@@ -169,33 +125,133 @@ def get_display_type(type_line: str, lang: str) -> str:
 
     return type_line
 
+class StartupSplashScreen(QDialog):
+    """V23.0: Premium splash screen showing startup progress."""
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(500, 300)
+        
+        # Main Container
+        container = QFrame(self)
+        container.setFixedSize(500, 300)
+        container.setStyleSheet("""
+            QFrame {
+                background-color: #1e1e1e;
+                border: 2px solid #555;
+                border-radius: 15px;
+            }
+        """)
+        
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+        
+        # Icon and Title
+        header = QHBoxLayout()
+        icon_lbl = QLabel()
+        pix = get_app_icon().pixmap(80, 80)
+        if not pix.isNull():
+            icon_lbl.setPixmap(pix)
+        header.addWidget(icon_lbl)
+        
+        title_box = QVBoxLayout()
+        title_lbl = QLabel("Commander Tool")
+        title_lbl.setStyleSheet("color: #ffaa00; font-size: 24px; font-weight: bold; border: none;")
+        ver_lbl = QLabel(f"Version {APP_VERSION}")
+        ver_lbl.setStyleSheet("color: #888; font-size: 14px; border: none;")
+        title_box.addWidget(title_lbl)
+        title_box.addWidget(ver_lbl)
+        header.addLayout(title_box)
+        header.addStretch()
+        
+        layout.addLayout(header)
+        layout.addStretch()
+        
+        # Status Label
+        self.status_lbl = QLabel("Initializing...")
+        self.status_lbl.setStyleSheet("color: #ccc; font-size: 13px; border: none;")
+        layout.addWidget(self.status_lbl)
+        
+        # Progress Bar
+        self.progress = QProgressBar()
+        self.progress.setFixedHeight(8)
+        self.progress.setTextVisible(False)
+        self.progress.setStyleSheet("""
+            QProgressBar {
+                background-color: #333;
+                border: none;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ffaa00, stop:1 #ffcc33);
+                border-radius: 4px;
+            }
+        """)
+        layout.addWidget(self.progress)
+        
+        # Center on screen
+        rect = self.frameGeometry()
+        cp = QApplication.desktop().availableGeometry().center()
+        rect.moveCenter(cp)
+        self.move(rect.topLeft())
 
+    def update_status(self, message, percentage):
+        self.status_lbl.setText(message)
+        self.progress.setValue(int(percentage))
+        QApplication.processEvents() # Ensure UI updates
 
-def ensure_emojis():
+def ensure_emojis(splash=None):
     """
     If resource_dir()/emojis does not exist,
-    download manamoji-slack from GitHub and extract emojis
+    download manamoji-slack from GitHub and extract emojis.
+    V23.0: Supports splash screen progress reporting.
     """
     if EMOJI_DIR.exists():
+        if splash: splash.update_status("Checking components...", 100)
         return
 
     try:
+        if splash: splash.update_status("Downloading mana symbols (First time setup)...", 10)
         logging.info("Downloading mana emojis from GitHub...")
-        r = requests.get(EMOJI_ZIP_URL, timeout=15)
-        r.raise_for_status()
+        
+        response = requests.get(EMOJI_ZIP_URL, stream=True, timeout=15)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        content = io.BytesIO()
+        
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                content.write(chunk)
+                downloaded += len(chunk)
+                if splash and total_size > 0:
+                    prog = 10 + (downloaded / total_size * 50) # 10% to 60%
+                    splash.update_status(f"Downloading symbols... {int(downloaded/1024/1024*10)/10}MB", prog)
 
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            for member in z.namelist():
-                # Extract only the emojis directory
-                if "emojis/" in member and not member.endswith("/"):
-                    target = EMOJI_DIR / Path(member).name
-                    EMOJI_DIR.mkdir(parents=True, exist_ok=True)
-                    with z.open(member) as src, open(target, "wb") as dst:
-                        dst.write(src.read())
+        if splash: splash.update_status("Extracting assets...", 65)
+        
+        with zipfile.ZipFile(content) as z:
+            members = [m for m in z.namelist() if "emojis/" in m and not m.endswith("/")]
+            total_members = len(members)
+            
+            for i, member in enumerate(members):
+                target = EMOJI_DIR / Path(member).name
+                EMOJI_DIR.mkdir(parents=True, exist_ok=True)
+                with z.open(member) as src, open(target, "wb") as dst:
+                    dst.write(src.read())
+                
+                if splash and i % 5 == 0:
+                    prog = 65 + (i / total_members * 35) # 65% to 100%
+                    splash.update_status(f"Extracting {i}/{total_members}...", prog)
 
         logging.info("Mana emojis downloaded.")
+        if splash: splash.update_status("Startup complete", 100)
 
     except Exception as e:
+        logging.error(f"Failed to download emojis: {e}")
         QMessageBox.critical(
             None,
             "Error",
@@ -205,10 +261,22 @@ class CSVFilterProxyModel(QSortFilterProxyModel):
     def filterAcceptsRow(self, source_row, source_parent):
         model = self.sourceModel()
         index = model.index(source_row, 0, source_parent)
+        
         if index.isValid():
+            # If it's a directory, always accept it so user can navigate
+            file_info_index = model.index(source_row, 0, source_parent)
+            if model.isDir(file_info_index):
+                return True
+                
             filename = model.data(index)
-            if filename and isinstance(filename, str) and filename.endswith("_consideration.csv"):
-                return False
+            if filename and isinstance(filename, str):
+                # 1. Hide consideration files
+                if filename.endswith("_consideration.csv"):
+                    return False
+                # 2. Accept only .csv files (Enforce this across all OS to avoid macOS native dialog issues)
+                if not filename.lower().endswith(".csv"):
+                    return False
+                    
         return super().filterAcceptsRow(source_row, source_parent)
 
 
@@ -422,9 +490,13 @@ class CardListItem(QWidget):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        set_app_icon(self)
-        self.setWindowTitle(f"Commander Tool (v{APP_VERSION}) - Main Window -")
+        # V17.2: Final Release-ready icon settings
+        self.setWindowIcon(get_app_icon())
+        self.setWindowTitle(f"Commander Tool (v{APP_VERSION})")
         self.resize(820, 620)
+
+        # V16: Delayed refresh to help the taskbar "catch up"
+        QTimer.singleShot(1500, lambda: self.setWindowIcon(get_app_icon()))
 
         self.setStyleSheet(f"""
             QWidget {{
@@ -1064,7 +1136,11 @@ class MainWindow(QWidget):
 
     def launch_test_play(self):
         if not self.csv_path:
-             QMessageBox.warning(self, "Warning", "Please load CSV first.")
+             QMessageBox.warning(
+                 self,
+                 "CSV Loader",
+                 UI_TEXT[self.language]["csv_not_loaded"]
+             )
              return
              
         # Create TestPlayWindow
@@ -1218,27 +1294,70 @@ class MainWindow(QWidget):
 
 
 
-# ================= Entry =================
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support() 
+
+    if platform.system() == "Windows":
+        import ctypes
+        from ctypes import wintypes
+        try:
+            myappid = "Tiora.CommanderTool.Final"
+            shell32 = ctypes.windll.shell32
+            shell32.SetCurrentProcessExplicitAppUserModelID.argtypes = [wintypes.LPWSTR]
+            hr = shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
 
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
     
-    # Set modern font for DPI-awareness and to prevent DirectWrite errors
-    default_font = QFont("Meiryo UI", 10)
-    app.setFont(default_font)
+    app.setApplicationName("CommanderTool")
+    app.setOrganizationName("Tiora")
+    app.setApplicationVersion(APP_VERSION)
 
-    ensure_emojis()
+    # Initial Splash (V23.1: At the very start!)
+    splash = StartupSplashScreen()
+    splash.show()
+    splash.update_status("Starting up...", 5)
+    app.processEvents()
 
-    # Set application-wide icon (affects Dock, taskbar, Alt+Tab)
-    app_icon = QIcon(str(app_dir() / "icons" / "commander_tool_icon.ico"))
-    QApplication.setWindowIcon(app_icon)
+    # Load heavy modules with status
+    splash.update_status("Loading core modules...", 15)
+    import generator as gen_mod
+    generator = gen_mod
+    
+    splash.update_status("Loading deck editor...", 30)
+    from deck_building_window import DeckBuildingWindow as DBW
+    DeckBuildingWindow = DBW
+    
+    splash.update_status("Loading simulation engine...", 45)
+    import mulligan_simulator as ms_mod
+    mulligan_simulator = ms_mod
+    
+    splash.update_status("Loading card viewer...", 60)
+    from play_window import PlayWindow as PW
+    PlayWindow = PW
+    from test_play_window import TestPlayWindow as TPW
+    TestPlayWindow = TPW
+    
+    splash.update_status("Loading AI camera...", 75)
+    from camera_window import CameraWindow as CW
+    CameraWindow = CW
+
+    # Assets
+    ensure_emojis(splash)
+
+    splash.update_status("Finalizing UI...", 95)
+    icon = get_app_icon()
+    app.setWindowIcon(icon)
+    app.setFont(QFont("Arial", 10))
+    app.setDesktopFileName("Tiora.CommanderTool.Final")
 
     # Main window
     w = MainWindow()
+    splash.close()
     w.show()
     sys.exit(app.exec_())
 

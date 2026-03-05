@@ -7,27 +7,93 @@ from pathlib import Path
 from requests.exceptions import RequestException, Timeout
 import json
 from wisdomguild_scraper import fetch_text_from_wisdom_guild
+from common_func import exe_dir
 import logging
 logger = logging.getLogger(__name__)
 
 SCRYFALL_NAMED_URL = "https://api.scryfall.com/cards/named"
 
-# -------------------------
 # Session (for performance optimization)
-# -------------------------
 session = requests.Session()
 session.headers.update({
     "User-Agent": "CommanderTool/1.0"
 })
 
+# Utilities and Cache
+# -------------------------
+TOKEN_CACHE_PATH = exe_dir() / "token_cache.json"
+_token_cache = {}
 
-# -------------------------
-# Utilities
-# -------------------------
+def prune_card_data(card: dict) -> dict:
+    """
+    Remove heavy/unnecessary fields from Scryfall card data to keep the cache lightweight.
+    """
+    if not card: return None
+    
+    # Essential fields we need for display, text, and token discovery
+    essential_fields = [
+        "name", "oracle_id", "type_line", "mana_cost", "oracle_text", 
+        "layout", "image_uris", "card_faces", "all_parts", "printed_name", "printed_text"
+    ]
+    
+    pruned = {k: card[k] for k in essential_fields if k in card}
+    
+    # Recursively prune card faces if present
+    if "card_faces" in pruned:
+        pruned["card_faces"] = [
+            {k: face[k] for k in essential_fields if k in face}
+            for face in pruned["card_faces"]
+        ]
+        
+    return pruned
+
+def load_token_cache():
+    global _token_cache
+    if TOKEN_CACHE_PATH.exists():
+        try:
+            with open(TOKEN_CACHE_PATH, "r", encoding="utf-8") as f:
+                _token_cache = json.load(f)
+            
+            # V21.0: Prune existing heavy cache on first load
+            for name, entry in _token_cache.items():
+                if entry:
+                    if "main" in entry and entry["main"]:
+                        entry["main"] = prune_card_data(entry["main"])
+                    if "main_ja" in entry and entry["main_ja"]:
+                        entry["main_ja"] = prune_card_data(entry["main_ja"])
+                    if "tokens" in entry and entry["tokens"]:
+                        entry["tokens"] = [prune_card_data(t) for t in entry["tokens"]]
+            save_token_cache()
+            logger.info(f"[INFO] Loaded and pruned {len(_token_cache)} cards from token cache.")
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to load/prune token cache: {e}")
+            _token_cache = {}
+
+def save_token_cache():
+    global _token_cache
+    try:
+        with open(TOKEN_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_token_cache, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"[ERROR] Failed to save token cache: {e}")
+
+# Initial load
+load_token_cache()
 
 def safe_filename(text: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", text)
 
+def clean_card_name(name: str) -> str:
+    """
+    Remove Japanese ruby characters (FURIGANA) like '統（とう）率（そつ）の塔（とう）' -> '統率の塔'.
+    Also strips whitespace.
+    """
+    if not name: return ""
+    # Remove contents of full-width parentheses
+    cleaned = re.sub(r"（[^）]*）", "", name)
+    # Remove contents of half-width parentheses as well
+    cleaned = re.sub(r"\([^)]*\)", "", cleaned)
+    return cleaned.strip()
 
 def parse_decklist(path: Path):
     items = [] # List of {"name": str, "count": int}
@@ -168,6 +234,7 @@ def fetch_card(card_name: str, lang: str = "ja"):
     Falls back to English if a Japanese version is not found.
     Returns None only if the card cannot be found at all.
     """
+    card_name = clean_card_name(card_name)
     base = None
     for key in ("exact", "fuzzy"):
         r = safe_get(
@@ -242,94 +309,73 @@ def looks_japanese(text: str) -> bool:
 
 def fetch_related_tokens(card, lang):
     """
-    Find related tokens in all_parts and fetch their card data.
-    Broadens search but strictly filters for Token/Emblem types.
+    Find related tokens for a card.
+    Uses Scryfall's 'oracleid' search which is the most reliable way 
+    to find tokens/emblems associated with a card.
     """
     tokens = []
     seen_oracle_ids = set()
+    
+    oracle_id = card.get("oracle_id")
+    if not oracle_id:
+        return []
 
-    def is_actual_token(c_data):
-        layout = c_data.get("layout", "")
-        t_line = c_data.get("type_line", "")
-        set_type = c_data.get("set_type", "")
-        
-        # DEFINITELY NOT a token if it's a standard set release (unless it's a token/promo)
-        # Standard set_types that are normal cards: 'core', 'expansion', 'masters', 'commander', 'planechase', 'archenemy', 'vanguard', 'spellbook', 'starter'
-        # Token set_types: 'token', 'memorabilia', 'treasure_chest'
-        if set_type in ("core", "expansion", "masters", "commander", "starter") and layout not in ("token", "emblem", "double_faced_token"):
-            return False
-            
-        # Layouts that are definitively tokens/emblems
-        if layout in ("token", "emblem", "double_faced_token"):
-            return True
-        # Type line check as fallback
-        if "Token" in t_line or "Emblem" in t_line:
-            # Still, if it's a normal layout like 'normal', be very suspicious
-            if layout == "normal" and set_type in ("core", "expansion", "masters", "commander"):
-                return False
-            return True
-        return False
+    def is_valid_token(t_data):
+        """Helper to ensure a card is actually a token or emblem."""
+        layout = t_data.get("layout", "")
+        type_line = (t_data.get("type_line") or "").lower()
+        # Strictly allow only tokens, emblems, or cards with the 'token' layout
+        return layout in ["token", "emblem", "double_faced_token"] or "token" in type_line or "emblem" in type_line
 
-    # 1. Check all_parts (Reliable but sometimes missed)
+    # 1. Primary Method: Standard Scryfall 'all_parts' links
     all_parts = card.get("all_parts", [])
     for part in all_parts:
-        # Strictly only 'token' component. 
-        # 'combo_piece' and 'extra_card' are usually normal cards.
         if part.get("component") == "token":
             token_uri = part.get("uri")
             if token_uri:
                 r = safe_get(session, token_uri, timeout=5)
                 if r and r.status_code == 200:
                     t_data = r.json()
-                    if not is_actual_token(t_data):
-                        continue
-                        
                     oid = t_data.get("oracle_id")
-                    if oid and oid not in seen_oracle_ids:
-                        # If we need JA text, fetch it
+                    if oid and oid not in seen_oracle_ids and is_valid_token(t_data):
                         if lang == "ja":
                             ja_token = fetch_card_by_oracle_id(oid, "ja")
-                            if ja_token:
-                                t_data = ja_token
+                            if ja_token: t_data = ja_token
                         tokens.append(t_data)
                         seen_oracle_ids.add(oid)
 
-    # 2. Fallback: Parse card text for "token" or "emblem" keywords
-    txt = card.get("oracle_text", "")
-    if "card_faces" in card:
-        txt += " ".join(f.get("oracle_text", "") for f in card["card_faces"])
-    
-    txt_lower = txt.lower()
-    if "token" in txt_lower or "emblem" in txt_lower:
-        if len(tokens) < 1:
-            name_en = card.get("name")
-            # Strictly filter for is:token in query
-            query = f'is:token "{name_en}"'
-            r = safe_get(session, "https://api.scryfall.com/cards/search", params={"q": query}, timeout=5)
+    # 2. Fallbacks: If all_parts didn't work, try broader searches
+    if not tokens:
+        # A. Search by Oracle ID tag (Reliable for planeswalkers)
+        # V20.0: Added strict type filter to the query
+        query_tag = f'otag:creations-of-oracle-{oracle_id} (is:token or t:emblem)'
+        r = safe_get(session, "https://api.scryfall.com/cards/search", params={"q": query_tag}, timeout=5)
+        if r and r.status_code == 200:
+            data = r.json()
+            for t_data in data.get("data", []):
+                oid = t_data.get("oracle_id")
+                if oid and oid not in seen_oracle_ids and is_valid_token(t_data):
+                    if lang == "ja":
+                        ja_t = fetch_card_by_oracle_id(oid, "ja")
+                        if ja_t: t_data = ja_t
+                    tokens.append(t_data)
+                    seen_oracle_ids.add(oid)
+
+        # B. Search for tokens mentioning the card's EXACT name
+        if not tokens:
+            name_en = card["name"]
+            # V20.0: Ensure search is restricted to tokens/emblems
+            search_query = f'(is:token or t:emblem) "{name_en}"'
+            r = safe_get(session, "https://api.scryfall.com/cards/search", params={"q": search_query}, timeout=5)
             if r and r.status_code == 200:
                 data = r.json()
                 for t_data in data.get("data", []):
-                    if not is_actual_token(t_data):
-                        continue
                     oid = t_data.get("oracle_id")
-                    if oid and oid not in seen_oracle_ids:
-                        if lang == "ja":
-                            ja_t = fetch_card_by_oracle_id(oid, "ja")
-                            if ja_t: t_data = ja_t
-                        tokens.append(t_data)
-                        seen_oracle_ids.add(oid)
-
-            # Special check for Emblems
-            if "emblem" in txt_lower and not any("Emblem" in t.get("type_line", "") for t in tokens):
-                query_emblem = f't:emblem "{name_en}"'
-                r = safe_get(session, "https://api.scryfall.com/cards/search", params={"q": query_emblem}, timeout=5)
-                if r and r.status_code == 200:
-                    data = r.json()
-                    for t_data in data.get("data", []):
-                        if not is_actual_token(t_data):
-                            continue
-                        oid = t_data.get("oracle_id")
-                        if oid and oid not in seen_oracle_ids:
+                    if oid and oid not in seen_oracle_ids and is_valid_token(t_data):
+                        # HEURISTIC: Only keep it if it's actually related
+                        t_text = (t_data.get("oracle_text") or "").lower()
+                        t_name = t_data.get("name", "").lower()
+                        if name_en.lower() in t_text or name_en.lower() in t_name:
                             if lang == "ja":
                                 ja_t = fetch_card_by_oracle_id(oid, "ja")
                                 if ja_t: t_data = ja_t
@@ -578,29 +624,59 @@ def get_card_autocomplete(query: str) -> list:
     return []
 
 
-def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int = 1, is_token: bool = False, card_data: dict = None):
+def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int = 1, is_token: bool = False, card_data: dict = None, name_en: str = None):
     """
     Fetch card data and download images for a single card name.
     Returns a list of rows (main card + potential tokens).
-    ALWAYS uses English card for relationships and metadata logic,
-    then fetches localized data if needed.
+    - name: The search name (might be Japanese with Ruby)
+    - name_en: Optional explicit English name (high fidelity for metadata)
     """
-    # 1. Fetch Master English Card for metadata logic
-    # (Japanese cards often miss all_parts or have limited oracle_text)
-    if card_data and not card_data.get("all_parts") and not is_token:
-        # If passed card_data lacks all_parts, try to refresh from EN
-        card_en = fetch_card(name, "en")
-    elif not card_data:
-        card_en = fetch_card(name, "en")
-    else:
+    card_en = None
+    card_ja = None
+    tokens = []
+
+    # 0. If data is provided directly (recursion for tokens)
+    if card_data:
         card_en = card_data
 
-    if card_en is None:
-        return []
+    # 1. Performance Optimization: Global Cache (Main Cards only)
+    search_name = clean_card_name(name)
+    is_cached = False
+    if not is_token and card_en is None:
+        if search_name in _token_cache:
+            entry = _token_cache[search_name]
+            if entry is not None:
+                # V21.2: If we have full results cached, return them immediately.
+                # This skips ALL network calls, including text fallback and token recursion.
+                if "results" in entry and entry["results"]:
+                    logger.info(f"[INFO] Full result cache hit: {search_name}")
+                    return entry["results"], True
+                
+                card_en = entry.get("main")
+                tokens = entry.get("tokens", [])
+                card_ja = entry.get("main_ja")
+                is_cached = True
+                logger.info(f"[INFO] Partial token cache hit: {search_name}")
+                if card_en is None and not tokens:
+                    return [], True
+
+    if not card_en:
+        # 1. Fetch Master English Card for metadata logic
+        lookup_name = name_en if name_en else name
+        card_en = fetch_card(lookup_name, "en")
+
+        if card_en is None:
+            if not is_token:
+                _token_cache[search_name] = {"main": None, "tokens": [], "main_ja": None}
+                save_token_cache()
+            return [], False
+        
+        if not is_token:
+            tokens = fetch_related_tokens(card_en, language)
 
     # 2. Fetch Localized Card (if needed) for display strings
-    card_ja = None
-    if language == "ja":
+    # V20.1: Avoid redundant fetch if already cached/found
+    if language == "ja" and not card_ja:
         oid = card_en.get("oracle_id")
         if oid:
             card_ja = fetch_card_by_oracle_id(oid, "ja")
@@ -610,6 +686,10 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
         if card_ja and card_ja.get(field):
             return card_ja.get(field)
         return card_en.get(field, default)
+
+    # V21.2: Intermediate Scryfall objects are still used for row generation,
+    # but the full result will be cached at the end of the function.
+    pass
 
     en = card_en["name"]
     ja = pick("printed_name")
@@ -703,16 +783,26 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
 
     results = [row]
 
-    # If this is not a token, fetch related tokens using MASTER English card
+    # If this is not a token, process related tokens (populated from cache or fetch above)
     if not is_token:
-        tokens = fetch_related_tokens(card_en, language)
         for t_data in tokens:
             t_name = t_data["name"]
-            # t_data from fetch_related_tokens might already be JA if requested
-            t_rows = create_card_row(t_name, out_dir, language, count=0, is_token=True, card_data=t_data)
+            t_rows, _ = create_card_row(t_name, out_dir, language, count=0, is_token=True, card_data=t_data)
             results.extend(t_rows)
 
-    return results
+    # V21.2: Save the FULL results list to cache if this was a fresh scan or partial hit
+    if not is_token and (not is_cached or "results" not in _token_cache.get(search_name, {})):
+        entry = _token_cache.get(search_name, {"main": card_en, "tokens": tokens, "main_ja": card_ja})
+        entry["results"] = results
+        # Also ensure we save pruned versions of everything
+        entry["main"] = prune_card_data(card_en)
+        entry["main_ja"] = prune_card_data(card_ja)
+        entry["tokens"] = [prune_card_data(t) for t in tokens]
+        
+        _token_cache[search_name] = entry
+        save_token_cache()
+
+    return results, is_cached
 
 def find_existing_card_in_list(row: dict, card_list: list) -> dict:
     """
@@ -762,7 +852,7 @@ def generate_from_txt(
         if progress_callback:
             progress_callback(i, total, name)
             
-        card_rows = create_card_row(name, out_dir, language, count=cnt)
+        card_rows, is_cached = create_card_row(name, out_dir, language, count=cnt)
         if card_rows:
             for r in card_rows:
                 existing = find_existing_card_in_list(r, rows)
@@ -775,7 +865,8 @@ def generate_from_txt(
                 else:
                     rows.append(r)
         
-        time.sleep(0.1)
+        if not is_cached:
+            time.sleep(0.1)
 
     if not rows:
         return None

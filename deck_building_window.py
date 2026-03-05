@@ -1,3 +1,4 @@
+from typing import List, Dict
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame, QGridLayout,
     QLineEdit, QComboBox, QPushButton, QMessageBox, QCompleter, QMenu
@@ -9,6 +10,7 @@ import requests
 import csv
 import logging
 from gui_language import UI_TEXT, TYPE_LABELS
+from common_func import app_dir, get_app_icon
 import generator
 from image_selector import ImageSelectDialog
 
@@ -34,7 +36,7 @@ class AddCardWorker(QThread):
             self.error.emit(str(e))
 
 class SyncTokensWorker(QThread):
-    progress = pyqtSignal(int, int, str) # current, total, name
+    progress = pyqtSignal(int, int, str, bool) # current, total, name, is_cached
     finished = pyqtSignal(list) # all new token rows found
     error = pyqtSignal(str)
 
@@ -58,11 +60,15 @@ class SyncTokensWorker(QThread):
                     name = card.get("name_en") or card.get("name_ja")
                 if not name: continue
                 
-                self.progress.emit(i+1, total, name)
+                self.progress.emit(i+1, total, name, True) # Assume cached initially
                 
-                # Fetch fresh data from Scryfall to get all_parts/tokens
-                # Do NOT pass csv row as card_data
-                rows = generator.create_card_row(name, self.image_dir, self.language)
+                # V19.8: Explicitly pass the English card name (name_en or name_front from CSV)
+                # to maximize token discovery fidelity.
+                name_en = card.get("name_en") or card.get("name_front")
+                rows, is_cached = generator.create_card_row(name, self.image_dir, self.language, name_en=name_en)
+                
+                # Re-emit with actual cache status after fetch
+                self.progress.emit(i+1, total, name, is_cached)
                 
                 for r in rows:
                     if str(r.get("is_token")) == "True":
@@ -70,8 +76,9 @@ class SyncTokensWorker(QThread):
                         if not generator.find_existing_card_in_list(r, all_deck_tokens):
                             all_deck_tokens.append(r)
                 
-                import time
-                time.sleep(0.1) # Be nice to Scryfall
+                if not is_cached:
+                    import time
+                    time.sleep(0.1) # Be nice to Scryfall
                 
             self.finished.emit(all_deck_tokens)
         except Exception as e:
@@ -405,19 +412,23 @@ class SectionWidget(QWidget):
 class DeckBuildingWindow(QWidget):
     data_changed = pyqtSignal()
 
-    def __init__(self, cards, image_dir, lang="ja", csv_path=None, parent=None):
-        super().__init__(parent)
+    def __init__(self, cards, image_dir, language="ja", csv_path=None):
+        super().__init__()
         self.csv_path = Path(csv_path) if csv_path else None
         self.consideration_csv_path = self.csv_path.parent / f"{self.csv_path.stem}_consideration.csv" if self.csv_path else None
         
-        self.setWindowTitle(UI_TEXT[lang]["deck_building"])
+        self.setWindowTitle(UI_TEXT[language]["deck_building"])
+        self.setWindowIcon(get_app_icon())
         self.resize(1100, 900)
         self.setStyleSheet("background: #1c1c1c; color: white; font-family: 'Segoe UI', 'Meiryo UI', sans-serif;")
 
+        # V17.2: Delayed refresh for taskbar grouping
+        QTimer.singleShot(1500, lambda: self.setWindowIcon(get_app_icon()))
+
         self.cards = cards # Main Cards (reference from main window)
         self.consideration_cards = []
+        self.lang = language
         self.image_dir = image_dir
-        self.lang = lang
 
         self.preview_popup = HoverPreviewPopup(self)
 
@@ -1000,8 +1011,14 @@ class DeckBuildingWindow(QWidget):
         self.sync_worker.error.connect(lambda msg: QMessageBox.warning(self, "Error", msg))
         self.sync_worker.start()
 
-    def update_sync_progress(self, current, total, name):
+    def update_sync_progress(self, current, total, name, is_cached):
         self.search_input.setPlaceholderText(f"Scanning ({current}/{total}): {name}")
+        if not is_cached:
+            # Set to red for API hits
+            self.search_input.setStyleSheet("QLineEdit { color: red; } QLineEdit::placeholder { color: red; }")
+        else:
+            # Reset to default
+            self.search_input.setStyleSheet("")
 
     def on_sync_finished(self, relevant_tokens):
         self.sync_btn.setEnabled(True)

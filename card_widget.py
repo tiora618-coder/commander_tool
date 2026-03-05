@@ -19,10 +19,10 @@ class CardWidget(QWidget):
 
         pix = QPixmap(str(img_path))
         if not pix.isNull():
-            # Support High DPI (e.g. 150% scaling) by pre-scaling to 2x logical size
-            # target logical height is 300, so we scale to 600
-            self.pixmap = pix.scaledToHeight(600, Qt.SmoothTransformation)
-            self.pixmap.setDevicePixelRatio(2.0)
+            # Support High DPI (e.g. 150% scaling) by pre-scaling to 3x logical size
+            # target logical height is 300, so we scale to 900
+            self.pixmap = pix.scaledToHeight(900, Qt.SmoothTransformation)
+            self.pixmap.setDevicePixelRatio(3.0)
         else:
             self.pixmap = None
 

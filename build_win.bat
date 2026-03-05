@@ -50,6 +50,16 @@ echo DEBUG_LOG disabled.
 
 
 REM ===============================
+REM 0. Pre-build Cleanup: Kill running instances to avoid file locks
+REM ===============================
+echo Checking for running instances of CommanderTool.exe...
+taskkill /F /IM CommanderTool.exe /T 2>nul
+if errorlevel 0 (
+    echo Terminated existing CommanderTool.exe processes.
+    timeout /t 2 /nobreak >nul
+)
+
+REM ===============================
 REM 1. Get version from config.py
 REM ===============================
 for /f "tokens=2 delims==" %%A in ('findstr "APP_VERSION" "%ROOT_DIR%config.py"') do (
@@ -92,6 +102,11 @@ if errorlevel 1 (
     goto RESTORE_MAIN
 )
 
+if not exist "%DIST_DIR%\CommanderTool.exe" (
+    echo ERROR: CommanderTool.exe was not found in dist folder after build!
+    goto RESTORE_MAIN
+)
+
 echo Build completed.
 
 
@@ -101,37 +116,46 @@ REM ===============================
 set ZIP_NAME=CommanderTool_v%VERSION%_Win.zip
 set ZIP_PATH=%RELEASE_DIR%\%ZIP_NAME%
 
-echo Creating ZIP: %ZIP_NAME%
+echo Preparing to create ZIP: %ZIP_NAME%
 
 copy /y "%README_BASE%" "%README_BAK%" >nul
 copy /y "%README_TMP%" "%README_BASE%" >nul
 
 REM Wait for file locks to release (antivirus scan, PyInstaller cleanup)
-echo Waiting for file locks to release...
-timeout /t 10 /nobreak >nul
-
-REM Delete any existing ZIP before creating
-if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%" >nul
+echo Waiting for OS and Antivirus to release handles (15s)...
+timeout /t 15 /nobreak >nul
 
 set RETRY_COUNT=0
 :ZIP_RETRY
 set /a RETRY_COUNT+=1
 echo ZIP creation attempt !RETRY_COUNT! of 3...
 
-powershell -NoLogo -NoProfile -Command "Compress-Archive -Force '%DIST_DIR%\CommanderTool.exe','%RELEASE_DIR%\LICENSE','%README_BASE%','%RELEASE_DIR%\Sample_deck_file_Zurgo_Stormrender.txt' '%ZIP_PATH%'" 2>nul
+REM Delete any existing ZIP before creating to ensure atomicity
+if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%" >nul
 
-if exist "%ZIP_PATH%" (
-    echo ZIP created successfully: %ZIP_PATH%
-    goto ZIP_DONE
+powershell -NoLogo -NoProfile -Command "Compress-Archive -Force -Path '%DIST_DIR%\CommanderTool.exe','%RELEASE_DIR%\LICENSE','%README_BASE%','%RELEASE_DIR%\Sample_deck_file_Zurgo_Stormrender.txt' -DestinationPath '%ZIP_PATH%'"
+
+if %ERRORLEVEL% EQU 0 (
+    if exist "%ZIP_PATH%" (
+        echo ZIP created successfully: %ZIP_PATH%
+        goto ZIP_DONE
+    )
 )
 
+echo ERROR: ZIP creation failed or was partial (Attempt !RETRY_COUNT!).
+
 if !RETRY_COUNT! lss 3 (
-    echo ZIP not created. Waiting 7 seconds before retry...
-    timeout /t 7 /nobreak >nul
+    echo Possible file lock by Antivirus. Waiting 20 seconds before retry...
+    timeout /t 20 /nobreak >nul
     goto ZIP_RETRY
 )
 
-echo ERROR: Failed to create ZIP after 3 attempts.
+echo.
+echo ======================================================================
+echo ERROR: Failed to create ZIP after !RETRY_COUNT! attempts.
+echo Please check if Antivirus is blocking the file or if CommanderTool.exe
+echo is still running in Task Manager.
+echo ======================================================================
 goto ZIP_DONE
 
 :ZIP_DONE

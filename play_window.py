@@ -1,6 +1,6 @@
 from gui_language import UI_TEXT, TYPE_LABELS
 from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
-from common_func import strip_ruby, mana_symbol_to_filename, app_dir
+from common_func import strip_ruby, mana_symbol_to_filename, app_dir, get_app_icon
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -196,7 +196,11 @@ class PlayWindow(QWidget):
         self.face = "front"
 
         self.setWindowTitle(f"Commander Tool (v{APP_VERSION}) - Play Window -")
+        self.setWindowIcon(get_app_icon())
         self.resize(560, 900)
+
+        # Delayed refresh for taskbar grouping
+        QTimer.singleShot(1500, lambda: self.setWindowIcon(get_app_icon()))
 
         self.setStyleSheet("""
             QWidget { background:#111; color:white; font-family: 'Meiryo UI'; }
@@ -216,7 +220,7 @@ class PlayWindow(QWidget):
         self.pending_deltas = collections.defaultdict(int)
         self.log_timer = QTimer(self)
         self.log_timer.setSingleShot(True)
-        self.log_timer.setInterval(1000)
+        self.log_timer.setInterval(2500)
         self.log_timer.timeout.connect(self.commit_log)
         self.log_popup = None
 

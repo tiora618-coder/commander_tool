@@ -640,7 +640,10 @@ class StartWindow(QWidget):
 
             label = QLabel()
             pix = QPixmap(str(img_path))
-            pix = pix.scaled(110, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            if not pix.isNull():
+                # V18.1: Support High-DPI by scaling to 2x logical size (220x320)
+                pix = pix.scaled(220, 320, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pix.setDevicePixelRatio(2.0)
             label.setPixmap(pix)
             label.setToolTip(f"{card_id}\nCount: {count}")
             layout.addWidget(label)
@@ -858,9 +861,10 @@ class HandResultWidget(QWidget):
                 
                 label = QLabel()
                 pix = QPixmap(str(img_path))
-                # さらにサイズアップ (1.5倍)
-                # 80 * 1.5 = 120, 116 * 1.5 = 174
-                pix = pix.scaled(120, 174, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                if not pix.isNull():
+                    # V18.1: High-DPI support (2x logical size: 240x348)
+                    pix = pix.scaled(240, 348, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    pix.setDevicePixelRatio(2.0)
                 label.setPixmap(pix)
                 label.setToolTip(card_id)
                 

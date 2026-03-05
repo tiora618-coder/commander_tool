@@ -25,6 +25,7 @@ from PyQt5.QtCore import pyqtSignal
 import torch
 from model_metric import ConvNeXtEmbed
 from log_window import LogWindow, StdoutRedirect
+from common_func import get_app_icon
 import platform
 import cv2
 
@@ -227,6 +228,12 @@ class CameraWindow(QWidget):
 
         self.csv_path = csv_path
         self.deck_dir = csv_path.parent
+        
+        self.setWindowTitle("Camera Detection - Commander Tool")
+        self.setWindowIcon(get_app_icon())
+
+        # Delayed refresh for taskbar grouping
+        QTimer.singleShot(1500, lambda: self.setWindowIcon(get_app_icon()))
 
         # ---------- Detection State ----------
         self.last_box_center = None

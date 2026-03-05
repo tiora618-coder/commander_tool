@@ -1,4 +1,4 @@
-
+from typing import List, Dict
 import sys
 import random
 from pathlib import Path
@@ -24,9 +24,10 @@ from PyQt5.QtWidgets import QGraphicsObject
 
 
 
-from common_func import load_or_download_card_back, exe_dir
+from common_func import load_or_download_card_back, exe_dir, app_dir, get_app_icon
 from gui_language import UI_TEXT, LANG_EN, LANG_JA
 from simulation_window import SimulationWindow
+from image_selector import ImageSelectDialog
 
 
 # Constants for layout
@@ -64,7 +65,7 @@ class ToastLabel(QLabel):
 
 class CardItem(QGraphicsPixmapItem):
     @staticmethod
-    def _scale_pixmap(pixmap, factor=2.0):
+    def _scale_pixmap(pixmap, factor=3.0):
         if pixmap.isNull() or pixmap.height() <= 0:
             return pixmap
         hi_res_w = int(CARD_WIDTH_LOGICAL * factor)
@@ -80,8 +81,8 @@ class CardItem(QGraphicsPixmapItem):
         super().__init__()
         # Store original for high-quality preview
         self.pixmap_face_orig = pixmap
-        # Use 2x for the scene cards
-        scaled_face = CardItem._scale_pixmap(pixmap, factor=2.0)
+        # Use 3x for the scene cards (High-DPI support)
+        scaled_face = CardItem._scale_pixmap(pixmap, factor=3.0)
         
         self.card_data = card_data
         self.card_id = card_id
@@ -659,14 +660,21 @@ class TestPlayScene(QGraphicsScene):
         self.zones["Battlefield"] = QRectF(20, 20, right_col_x - 40, bf_h)
 
 
+        # Zone Labels Storage
+        self.zone_labels = {}
+        
+        def get_text(key):
+            lang = self.test_play_window.language
+            return UI_TEXT.get(lang, UI_TEXT["ja"]).get(key, key)
+
         # Calm, muted color palette
-        self.add_zone("Command",    QColor("#3d5a6e"), "Command Zone")
-        self.add_zone("Exile",      QColor("#5a5a5a"), "Exile")
-        self.add_zone("Graveyard",  QColor("#3a3a3a"), "Graveyard")
-        self.add_zone("Library",    QColor("#2e4057"), "Library")
-        self.add_zone("Hand",       QColor("#2e5744"), "Hand")
-        self.add_zone("Lands",      QColor("#4a5e3e"), "Lands")
-        self.add_zone("Battlefield",QColor("#3e3e3e"), "Battlefield")
+        self.add_zone("Command",    QColor("#3d5a6e"), get_text("zone_command"))
+        self.add_zone("Exile",      QColor("#5a5a5a"), get_text("zone_exile"))
+        self.add_zone("Graveyard",  QColor("#3a3a3a"), get_text("zone_graveyard"))
+        self.add_zone("Library",    QColor("#2e4057"), get_text("zone_library"))
+        self.add_zone("Hand",       QColor("#2e5744"), get_text("zone_hand"))
+        self.add_zone("Lands",      QColor("#4a5e3e"), get_text("zone_lands"))
+        self.add_zone("Battlefield",QColor("#3e3e3e"), get_text("zone_battlefield"))
 
         # Logic State
         self.cards_in_zone = {
@@ -693,6 +701,27 @@ class TestPlayScene(QGraphicsScene):
         text.setFont(font)
         text.setPos(rect.x() + 5, rect.y() + 3)
         text.setZValue(-99)  # Just above zone bg
+        self.zone_labels[name] = text
+
+    def retranslate_ui(self):
+        """V22.0: Update all zone labels."""
+        def get_text(key):
+            lang = self.test_play_window.language
+            return UI_TEXT.get(lang, UI_TEXT["ja"]).get(key, key)
+
+        mapping = {
+            "Command": "zone_command",
+            "Exile": "zone_exile",
+            "Graveyard": "zone_graveyard",
+            "Library": "zone_library",
+            "Hand": "zone_hand",
+            "Lands": "zone_lands",
+            "Battlefield": "zone_battlefield"
+        }
+        for zone_name, text_item in self.zone_labels.items():
+            key = mapping.get(zone_name)
+            if key:
+                text_item.setText(get_text(key))
 
     def get_card_zone(self, card_item):
         for z, items in self.cards_in_zone.items():
@@ -1118,12 +1147,13 @@ class TokenIconWidget(QWidget):
                 self.test_play_window.scene.removeItem(item)
 
 class SyncTokensWorker(QThread):
-    progress = pyqtSignal(int, int, str) # current, total, name
+    progress = pyqtSignal(int, int, str, bool) # current, total, name, is_cached
     finished = pyqtSignal(list) # all new token rows found
     error = pyqtSignal(str)
 
-    def __init__(self, cards, image_dir, language):
+    def __init__(self, deck_list, deck_name, language):
         super().__init__()
+        set_app_icon(self)
         self.cards = cards
         self.image_dir = image_dir
         self.language = language
@@ -1140,16 +1170,21 @@ class SyncTokensWorker(QThread):
             for i, card in enumerate(main_cards):
                 name = card.get("name_en")
                 if not name: continue
-                self.progress.emit(i+1, total, name)
+                self.progress.emit(i+1, total, name, False) # Assume miss until confirmed
                 
-                rows = generator.create_card_row(name, self.image_dir, self.language)
+                # V19.8: Explicitly pass the English card name for maximum token discovery fidelity.
+                rows, is_cached = generator.create_card_row(name, self.image_dir, self.language, name_en=name)
+                
+                # Re-emit actual status
+                self.progress.emit(i+1, total, name, is_cached)
                 for r in rows:
                     if str(r.get("is_token")) == "True":
                         # Deduplicate
                         if not any(t["name_en"] == r["name_en"] for t in new_tokens) and \
                            not any(t["name_en"] == r["name_en"] for t in self.cards):
                             new_tokens.append(r)
-                time.sleep(0.1)
+                if not is_cached:
+                    time.sleep(0.1)
                 
             self.finished.emit(new_tokens)
         except Exception as e:
@@ -1187,13 +1222,13 @@ class TokenViewerPopup(QFrame):
         
         # Header
         header = QHBoxLayout()
-        self.title_label = QLabel(UI_TEXT[test_play_window.language]["tokens"])
-        self.title_label.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
-        header.addWidget(self.title_label)
+        self.lbl_title = QLabel(UI_TEXT[test_play_window.language]["tokens"])
+        self.lbl_title.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
+        header.addWidget(self.lbl_title)
         header.addStretch()
-        self.sync_btn = QPushButton(UI_TEXT[test_play_window.language]["generate_token_list"])
-        self.sync_btn.clicked.connect(self.on_sync_tokens_clicked)
-        header.addWidget(self.sync_btn)
+        self.btn_sync = QPushButton(UI_TEXT[test_play_window.language]["generate_token_list"])
+        self.btn_sync.clicked.connect(self.on_sync_tokens_clicked)
+        header.addWidget(self.btn_sync)
         
         layout.addLayout(header)
 
@@ -1213,7 +1248,18 @@ class TokenViewerPopup(QFrame):
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.hide)
         footer.addWidget(btn_close)
+        self.btn_close = btn_close
         layout.addLayout(footer)
+
+    def retranslate_ui(self):
+        """Update strings from UI_TEXT."""
+        lang = self.test_play_window.language
+        def get_text(key):
+            return UI_TEXT.get(lang, UI_TEXT["ja"]).get(key, key)
+        
+        self.lbl_title.setText(get_text("tokens"))
+        self.btn_sync.setText(get_text("sync_tokens"))
+        self.btn_close.setText(get_text("close"))
 
     def populate(self):
         while self.grid_layout.count():
@@ -1234,8 +1280,8 @@ class TokenViewerPopup(QFrame):
             self.grid_layout.addWidget(w, row, col)
 
     def on_sync_tokens_clicked(self):
-        self.sync_btn.setEnabled(False)
-        self.sync_btn.setText("Scanning...")
+        self.btn_sync.setEnabled(False)
+        self.btn_sync.setText("Scanning...")
         
         self.worker = SyncTokensWorker(self.test_play_window.deck_list, self.test_play_window.image_root, self.test_play_window.language)
         self.worker.progress.connect(self.update_progress)
@@ -1243,12 +1289,16 @@ class TokenViewerPopup(QFrame):
         self.worker.error.connect(self.on_sync_error)
         self.worker.start()
 
-    def update_progress(self, curr, total, name):
-        self.sync_btn.setText(f"Scanning {curr}/{total}")
+    def update_progress(self, curr, total, name, is_cached):
+        self.btn_sync.setText(f"Scanning {curr}/{total}")
+        if not is_cached:
+            self.btn_sync.setStyleSheet("QPushButton { color: red; font-weight: bold; }")
+        else:
+            self.btn_sync.setStyleSheet("")
 
     def on_sync_finished(self, new_tokens):
-        self.sync_btn.setEnabled(True)
-        self.sync_btn.setText(UI_TEXT[self.test_play_window.language]["generate_token_list"])
+        self.btn_sync.setEnabled(True)
+        self.btn_sync.setText(UI_TEXT[self.test_play_window.language]["generate_token_list"])
         
         if new_tokens:
             self.test_play_window.deck_list.extend(new_tokens)
@@ -1260,8 +1310,8 @@ class TokenViewerPopup(QFrame):
             QMessageBox.information(self, "Sync", "All tokens are up to date.")
 
     def on_sync_error(self, err):
-        self.sync_btn.setEnabled(True)
-        self.sync_btn.setText(UI_TEXT[self.test_play_window.language]["generate_token_list"])
+        self.btn_sync.setEnabled(True)
+        self.btn_sync.setText(UI_TEXT[self.test_play_window.language]["generate_token_list"])
         QMessageBox.warning(self, "Error", err)
 
     def show_at(self, pos):
@@ -1319,9 +1369,9 @@ class ZoneViewerPopup(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         
         # Title
-        self.title_label = QLabel("Zone Viewer")
-        self.title_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
-        layout.addWidget(self.title_label)
+        self.lbl_title = QLabel("Zone Viewer")
+        self.lbl_title.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+        layout.addWidget(self.lbl_title)
 
         
         # Scroll area with card grid
@@ -1339,12 +1389,22 @@ class ZoneViewerPopup(QFrame):
         # Close button
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.close)
+        self.btn_close = btn_close
         layout.addWidget(btn_close)
+        
+    def retranslate_ui(self):
+        """Update strings from UI_TEXT."""
+        lang = self.test_play_window.language
+        def get_text(key):
+            return UI_TEXT.get(lang, UI_TEXT["ja"]).get(key, key)
+        
+        if hasattr(self, "btn_close"):
+            self.btn_close.setText(get_text("close"))
     
     def populate(self, zone_name):
         """Fill grid with cards from the specified zone."""
         self.current_zone = zone_name
-        self.title_label.setText(zone_name)
+        self.lbl_title.setText(zone_name)
         
         # Clear old
         while self.grid_layout.count():
@@ -1398,27 +1458,36 @@ class ZoneViewerPopup(QFrame):
 
 
 class TestPlayWindow(QWidget):
-    def __init__(self, deck_list, deck_name, language, image_root=None, csv_path=None, parent=None):
+    def __init__(self, cards: List[Dict], deck_name: str, language="ja", image_root: Path = None, csv_path=None):
         super().__init__()
-        self.deck_list = deck_list
+        self.deck_list = cards
         self.image_root = Path(image_root) if image_root else None
         self.csv_path = Path(csv_path) if csv_path else None
         self.language = language
         self.card_items = []
         self._initializing = True
         self.setWindowTitle(f"Test Play - {deck_name}")
+        self.deck_name = deck_name # V22.0: Store for re-titling
+        self.setWindowIcon(get_app_icon())
         self.resize(1600, 900)
+
+        # Delayed refresh for taskbar grouping
+        QTimer.singleShot(1500, lambda: self.setWindowIcon(get_app_icon()))
         
         main_layout = QVBoxLayout(self)
         
         # Toolbar
         btn_layout = QHBoxLayout()
         
-        # DEBUG: Check language keys
-        # print(f"DEBUG: Language={self.language}")
-        # if self.language in UI_TEXT:
-        #     print(f"DEBUG: Keys in UI_TEXT[{self.language}]: {list(UI_TEXT[self.language].keys())}")
-        
+        # Language selection (leftmost)
+        from PyQt5.QtWidgets import QComboBox
+        self.combo_lang = QComboBox()
+        self.combo_lang.addItems(["日本語", "English"])
+        self.combo_lang.setCurrentIndex(0 if self.language == "ja" else 1)
+        self.combo_lang.setFixedWidth(80)
+        self.combo_lang.currentIndexChanged.connect(self.on_language_changed)
+        btn_layout.addWidget(self.combo_lang)
+
         # Use .get() or check key to be safe
         def get_text(key):
             return UI_TEXT.get(self.language, UI_TEXT["ja"]).get(key, key)
@@ -1429,7 +1498,7 @@ class TestPlayWindow(QWidget):
         self.btn_redo = QPushButton(get_text("redo"))
         
         self.turn_count = 1
-        self.lbl_turn = QLabel(f"Turn: {self.turn_count}")
+        self.lbl_turn = QLabel(f"{get_text('turn')}: {self.turn_count}")
         self.lbl_turn.setStyleSheet("font-size: 16px; font-weight: bold; margin-left: 10px; color: #ffaa00;")
         
         btn_layout.addWidget(self.btn_reset)
@@ -1544,6 +1613,58 @@ class TestPlayWindow(QWidget):
 
         self.token_id_counter = 0
         self.active_toasts = []
+        
+        # Initial retranslate to set correct labels (V22.0)
+        self.retranslate_ui()
+
+    def on_language_changed(self, index):
+        """V22.0: Handler for language combo box change."""
+        self.language = "ja" if index == 0 else "en"
+        self.retranslate_ui()
+        # Log the language change
+        msg = "Language changed to English" if self.language == "en" else "言語を日本語に変更しました"
+        self.log_action(msg)
+
+    def retranslate_ui(self):
+        """V22.0: Update all UI strings based on self.language."""
+        def get_text(key):
+            return UI_TEXT.get(self.language, UI_TEXT["ja"]).get(key, key)
+
+        # Window Title
+        self.setWindowTitle(f"{get_text('test_play_title')} - {self.deck_name}")
+
+        # Toolbar Buttons
+        self.btn_reset.setText(get_text("reset_game"))
+        self.btn_next_turn.setText(get_text("next_turn"))
+        self.btn_undo.setText(get_text("undo"))
+        self.btn_redo.setText(get_text("redo"))
+        self.lbl_turn.setText(f"{get_text('turn')}: {self.turn_count}")
+
+        # Log Handle
+        self.btn_log_handle.setText("◁" if self.log_visible else "▷")
+        
+        # Scene Buttons (Update text on each Button widget)
+        if hasattr(self, "scene_btn_view_lib"):
+            self.scene_btn_view_lib.widget().setText(get_text("view_library"))
+        if hasattr(self, "scene_btn_shuffle"):
+            self.scene_btn_shuffle.widget().setText(get_text("shuffle_library"))
+        if hasattr(self, "scene_btn_view_gy"):
+            self.scene_btn_view_gy.widget().setText(get_text("view_graveyard"))
+        if hasattr(self, "scene_btn_view_ex"):
+            self.scene_btn_view_ex.widget().setText(get_text("view_exile"))
+        if hasattr(self, "scene_btn_tokens"):
+            self.scene_btn_tokens.widget().setText(get_text("tokens"))
+        if hasattr(self, "cb_show_top"):
+            self.cb_show_top.setText(get_text("always_show_top"))
+        if hasattr(self, "lbl_life_header"):
+            self.lbl_life_header.setText(get_text("life_label_scene"))
+
+        if hasattr(self, "zone_popup"):
+            self.zone_popup.retranslate_ui()
+        if hasattr(self, "token_viewer"):
+            self.token_viewer.retranslate_ui()
+        if hasattr(self, "scene"):
+            self.scene.retranslate_ui()
 
     def toggle_log(self):
         self.log_visible = not self.log_visible
@@ -1795,31 +1916,31 @@ class TestPlayWindow(QWidget):
         proxy_cb.setPos(btn_x - 10, lib_rect.y() - 25)
         self.scene.addItem(proxy_cb)
 
-        create_btn("View Library", lambda: self._show_zone_popup("Library"), btn_x, lib_rect.y() + 10)
-        create_btn("Shuffle Library", self.shuffle_library, btn_x, lib_rect.y() + 45)
+        self.scene_btn_view_lib = create_btn("View Library", lambda: self._show_zone_popup("Library"), btn_x, lib_rect.y() + 10)
+        self.scene_btn_shuffle = create_btn("Shuffle Library", self.shuffle_library, btn_x, lib_rect.y() + 45)
 
 
         # Graveyard Controls
         gy_rect = self.scene.zones["Graveyard"]
-        create_btn("View Graveyard", lambda: self._show_zone_popup("Graveyard"), btn_x, gy_rect.y() + 10)
+        self.scene_btn_view_gy = create_btn("View Graveyard", lambda: self._show_zone_popup("Graveyard"), btn_x, gy_rect.y() + 10)
 
         # Exile Controls
         ex_rect = self.scene.zones["Exile"]
-        create_btn("View Exile", lambda: self._show_zone_popup("Exile"), btn_x, ex_rect.y() + 10)
+        self.scene_btn_view_ex = create_btn("View Exile", lambda: self._show_zone_popup("Exile"), btn_x, ex_rect.y() + 10)
 
         # Tokens Control
-        create_btn(UI_TEXT[self.language]["tokens"], self.show_token_menu, btn_x, ex_rect.y() + 45)
+        self.scene_btn_tokens = create_btn(UI_TEXT[self.language]["tokens"], self.show_token_menu, btn_x, ex_rect.y() + 45)
 
         # Life Counter (Below Library buttons)
         life_y = lib_rect.y() + 90 
         
         # Life Label (Static)
-        life_label = self.scene.addSimpleText("LIFE")
-        life_label.setBrush(QBrush(QColor(200, 200, 200, 180)))
+        self.lbl_life_header = self.scene.addSimpleText("LIFE")
+        self.lbl_life_header.setBrush(QBrush(QColor(200, 200, 200, 180)))
         font = QFont("Segoe UI", 10, QFont.Bold)
-        life_label.setFont(font)
-        life_label.setPos(btn_x + 35, life_y)
-        life_label.setZValue(-99)
+        self.lbl_life_header.setFont(font)
+        self.lbl_life_header.setPos(btn_x + 35, life_y)
+        self.lbl_life_header.setZValue(-99)
 
         # Life Number Display
         self.lbl_life_val = QLabel(str(self.life))
