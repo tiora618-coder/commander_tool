@@ -150,11 +150,26 @@ class StartupSplashScreen(QDialog):
         
         # Icon and Title
         header = QHBoxLayout()
+        
+        # V26.0: Square frame for icon to match square source image
+        icon_frame = QFrame()
+        icon_frame.setFixedSize(84, 84)
+        icon_frame.setStyleSheet("""
+            QFrame {
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 0px;
+            }
+        """)
+        icon_inner_layout = QVBoxLayout(icon_frame)
+        icon_inner_layout.setContentsMargins(2, 2, 2, 2)
+        
         icon_lbl = QLabel()
         pix = get_app_icon().pixmap(80, 80)
         if not pix.isNull():
             icon_lbl.setPixmap(pix)
-        header.addWidget(icon_lbl)
+        icon_inner_layout.addWidget(icon_lbl)
+        header.addWidget(icon_frame)
         
         title_box = QVBoxLayout()
         title_lbl = QLabel("Commander Tool")
@@ -1112,12 +1127,8 @@ class MainWindow(QWidget):
             return
 
         # StartWindow will automatically trigger loading because we pass csv_path
-        self.sim_start_window = mulligan_simulator.StartWindow(initial_csv=self.csv_path)
-        # Use initial_csv's language if possible, otherwise it defaults to JA in StartWindow.__init__
-        # For now, it will use StartWindow's default (JA). 
-        # But we can sync it:
-        self.sim_start_window.language = self.language
-        self.sim_start_window.change_language() 
+        # V24.0: Pass language directly to constructor
+        self.sim_start_window = mulligan_simulator.StartWindow(initial_csv=self.csv_path, language=self.language)
         
         self.sim_start_window.show()
 

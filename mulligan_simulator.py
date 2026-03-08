@@ -19,11 +19,11 @@ import json
 import requests
 
 class StartWindow(QWidget):
-    def __init__(self, initial_csv=None):
+    def __init__(self, initial_csv=None, language=LANG_JA):
         super().__init__()
 
         self.csv_path = Path(initial_csv) if initial_csv else None
-        self.language = LANG_JA
+        self.language = language
 
         self.setWindowTitle("Mulligan Simulator")
         self.resize(1300, 850)
@@ -173,6 +173,12 @@ class StartWindow(QWidget):
         self.lang_selector = QComboBox()
         self.lang_selector.addItem("日本語", LANG_JA)
         self.lang_selector.addItem("English", LANG_EN)
+        
+        # Set initial selection without triggering signal
+        idx = self.lang_selector.findData(self.language)
+        if idx >= 0:
+            self.lang_selector.setCurrentIndex(idx)
+            
         self.lang_selector.currentIndexChanged.connect(self.change_language)
         lang_row.addWidget(self.lang_label)
         lang_row.addWidget(self.lang_selector)
@@ -289,6 +295,9 @@ class StartWindow(QWidget):
             self.rating_sections[r] = section
 
         main.addWidget(self._separator())
+
+        # Update all labels to current language
+        self.change_language()
 
         # 初回は JSON があれば読み込み
         if self.csv_path:
