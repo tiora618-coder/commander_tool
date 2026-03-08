@@ -18,5 +18,8 @@ Built and packaged with PyInstaller.
 For Windows users, download the executable from the Releases page.
 Python is not required when using the exe.
 
+How to use CommanderTool (Japanese text)
+https://note.com/banana_877111/n/n29f535f2c6cf
+
 ## License
 Personal use / Non-commercial.
