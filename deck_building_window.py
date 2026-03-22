@@ -26,8 +26,10 @@ class AddCardWorker(QThread):
 
     def run(self):
         try:
-            # create_card_row now returns a list [main_card, token1, token2, ...]
-            rows = generator.create_card_row(self.card_name, self.out_dir, self.language)
+            # create_card_row now returns a tuple: (list [main_card, token1, ...], is_cached)
+            result = generator.create_card_row(self.card_name, self.out_dir, self.language)
+            rows = result[0] if isinstance(result, tuple) else result
+            
             if rows:
                 self.finished.emit(rows)
             else:
@@ -361,7 +363,7 @@ class SectionWidget(QWidget):
     hover_entered = pyqtSignal(dict, QPoint)
     hover_left = pyqtSignal()
 
-    def __init__(self, title, cards, image_dir, lang="ja", col_count=6, scale_height=180, section_key="main", callback=None, card_labels=None):
+    def __init__(self, title, cards, image_dir, lang="ja", col_count=5, scale_height=270, section_key="main", callback=None, card_labels=None):
         super().__init__()
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(10, 10, 10, 10)
@@ -387,6 +389,7 @@ class SectionWidget(QWidget):
         self.grid_layout.addStretch()
         self.layout.addLayout(self.grid_layout)
 
+        self.card_widgets = []
         for i, card in enumerate(cards):
             img_path = image_dir / card.get("card_file_front", "")
             name = card.get("name_ja") if lang == "ja" else card.get("name_en")
@@ -409,7 +412,36 @@ class SectionWidget(QWidget):
             w.count_changed.connect(lambda val, c=card: self.on_count_changed(c, val))
             w.hover_entered.connect(self.hover_entered.emit)
             w.hover_left.connect(self.hover_left.emit)
+            self.card_widgets.append(w)
             self.grid.addWidget(w, i // col_count, i % col_count)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reflow_grid()
+
+    def reflow_grid(self):
+        if not self.card_widgets:
+            return
+
+        spacing = self.grid.spacing()
+        card_w = self.card_widgets[0].width()
+        if card_w == 0:
+            return
+
+        left, top, right, bottom = self.layout.getContentsMargins()
+        grid_left, grid_top, grid_right, grid_bottom = self.grid_layout.getContentsMargins()
+        
+        available_width = self.width() - left - right - grid_left - grid_right - 20
+        cols = (available_width + spacing) // (card_w + spacing)
+        cols = max(1, int(cols))
+
+        if getattr(self, '_last_col_count', None) == cols:
+            return
+        self._last_col_count = cols
+
+        for i, w in enumerate(self.card_widgets):
+            self.grid.removeWidget(w)
+            self.grid.addWidget(w, i // cols, i % cols)
 
     def update_title(self):
         total_qty = sum(int(c.get("count", 1)) for c in self.cards_ref)
@@ -1170,7 +1202,7 @@ class DeckBuildingWindow(QWidget):
         
         if commander_list:
             sw = SectionWidget(UI_TEXT[self.lang]["commander"], commander_list, self.image_dir, self.lang, 
-                               col_count=2, scale_height=240, section_key="main", callback=self.show_context_menu,
+                               col_count=2, scale_height=360, section_key="main", callback=self.show_context_menu,
                                card_labels=commander_labels)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
@@ -1178,7 +1210,7 @@ class DeckBuildingWindow(QWidget):
         
         if companions:
             sw = SectionWidget(UI_TEXT[self.lang]["companion"], companions, self.image_dir, self.lang, 
-                               col_count=1, scale_height=240, section_key="main", callback=self.show_context_menu)
+                               col_count=1, scale_height=360, section_key="main", callback=self.show_context_menu)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
             top_row_layout.addWidget(sw)
@@ -1200,7 +1232,7 @@ class DeckBuildingWindow(QWidget):
         # 3. Creatures
         if creatures:
             sw = SectionWidget(UI_TEXT[self.lang]["creature"], creatures, self.image_dir, self.lang, 
-                                col_count=7, section_key="main", callback=self.show_context_menu)
+                                col_count=5, section_key="main", callback=self.show_context_menu)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
             self.content_layout.addWidget(sw)
@@ -1208,7 +1240,7 @@ class DeckBuildingWindow(QWidget):
         # 4. Spells
         if spells:
             sw = SectionWidget(UI_TEXT[self.lang]["spell"], spells, self.image_dir, self.lang, 
-                                col_count=7, section_key="main", callback=self.show_context_menu)
+                                col_count=5, section_key="main", callback=self.show_context_menu)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
             self.content_layout.addWidget(sw)
@@ -1216,7 +1248,7 @@ class DeckBuildingWindow(QWidget):
         # 5. Lands
         if lands:
             sw = SectionWidget(UI_TEXT[self.lang]["land"], lands, self.image_dir, self.lang, 
-                                col_count=7, section_key="main", callback=self.show_context_menu)
+                                col_count=5, section_key="main", callback=self.show_context_menu)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
             self.content_layout.addWidget(sw)
@@ -1224,7 +1256,7 @@ class DeckBuildingWindow(QWidget):
         # 6. Considering Section
         if self.consideration_cards:
             sw = SectionWidget(UI_TEXT[self.lang]["considering"], self.consideration_cards, self.image_dir, self.lang, 
-                                col_count=7, section_key="consideration", callback=self.show_context_menu)
+                                col_count=5, section_key="consideration", callback=self.show_context_menu)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
             self.content_layout.addWidget(sw)
@@ -1232,7 +1264,7 @@ class DeckBuildingWindow(QWidget):
         # 7. Tokens Section
         if tokens:
             sw = SectionWidget(UI_TEXT[self.lang]["tokens"], tokens, self.image_dir, self.lang, 
-                                col_count=7, section_key="main", callback=self.show_context_menu)
+                                col_count=5, section_key="main", callback=self.show_context_menu)
             sw.hover_entered.connect(self.on_hover_preview)
             sw.hover_left.connect(self.on_hover_hide)
             self.content_layout.addWidget(sw)

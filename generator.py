@@ -779,7 +779,7 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
                 row["text_back_ja"] = jp_txt
     else:
         logger.info(f"Card format not supported: {en}")
-        return []
+        return [], False
 
     results = [row]
 
