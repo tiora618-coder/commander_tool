@@ -87,6 +87,22 @@ class SyncTokensWorker(QThread):
 class AutocompleteWorker(QThread):
     finished = pyqtSignal(list)
 
+    def __init__(self, query):
+        super().__init__()
+        self.query = query
+
+    def run(self):
+        try:
+            # Scryfall Autocomplete API
+            response = requests.get("https://api.scryfall.com/cards/autocomplete", params={"q": self.query}, timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+                self.finished.emit(data.get("data", []))
+            else:
+                self.finished.emit([])
+        except Exception:
+            self.finished.emit([])
+
 class RoundedImageLabel(QLabel):
     def __init__(self, radius=12, parent=None):
         super().__init__(parent)

@@ -852,9 +852,13 @@ class TestPlayScene(QGraphicsScene):
                 old_zone = z
                 break
         
-        # If removed from hand, rearrange hand to close gaps
+        # Rearrange old zone to update stack states (e.g. enabling new top card of Library)
         if old_zone == "Hand":
             self.arrange_hand()
+        elif old_zone in ["Library", "Graveyard", "Exile", "Command"]:
+            self.arrange_stack(old_zone)
+        elif old_zone == "Lands":
+            self.arrange_lands()
         
         self.cards_in_zone[zone_name].append(card_item)
         
