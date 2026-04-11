@@ -646,11 +646,24 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
         if search_name in _token_cache:
             entry = _token_cache[search_name]
             if entry is not None:
-                # V21.2: If we have full results cached, return them immediately.
+                # V21.2: If we have full results cached, check if expected images exist.
                 # This skips ALL network calls, including text fallback and token recursion.
                 if "results" in entry and entry["results"]:
-                    logger.info(f"[INFO] Full result cache hit: {search_name}")
-                    return entry["results"], True
+                    all_exist = True
+                    for r in entry["results"]:
+                        front = r.get("card_file_front")
+                        if front and not (out_dir / front).exists():
+                            all_exist = False
+                            break
+                        back = r.get("card_file_back")
+                        if back and not (out_dir / back).exists():
+                            all_exist = False
+                            break
+                    if all_exist:
+                        logger.info(f"[INFO] Full result cache hit with images: {search_name}")
+                        return entry["results"], True
+                    else:
+                        logger.info(f"[INFO] Full result cache hit but images missing, regenerating: {search_name}")
                 
                 card_en = entry.get("main")
                 tokens = entry.get("tokens", [])

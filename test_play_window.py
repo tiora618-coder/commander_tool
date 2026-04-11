@@ -1155,9 +1155,8 @@ class SyncTokensWorker(QThread):
     finished = pyqtSignal(list) # all new token rows found
     error = pyqtSignal(str)
 
-    def __init__(self, deck_list, deck_name, language):
+    def __init__(self, cards, image_dir, language):
         super().__init__()
-        set_app_icon(self)
         self.cards = cards
         self.image_dir = image_dir
         self.language = language
@@ -1219,6 +1218,13 @@ class TokenViewerPopup(QFrame):
             QPushButton:disabled {
                 color: #777;
                 background-color: #2a2a2a;
+            }
+            QMessageBox {
+                background-color: #2b2b2b;
+                border: 2px solid #555;
+            }
+            QMessageBox QLabel {
+                color: white;
             }
         """)
 
@@ -1294,11 +1300,11 @@ class TokenViewerPopup(QFrame):
         self.worker.start()
 
     def update_progress(self, curr, total, name, is_cached):
-        self.btn_sync.setText(f"Scanning {curr}/{total}")
+        self.btn_sync.setText(f"Scanning {curr}/{total} - {name}")
         if not is_cached:
-            self.btn_sync.setStyleSheet("QPushButton { color: red; font-weight: bold; }")
+            self.btn_sync.setStyleSheet("QPushButton { color: red; font-weight: bold; text-align: left; }")
         else:
-            self.btn_sync.setStyleSheet("")
+            self.btn_sync.setStyleSheet("QPushButton { text-align: left; }")
 
     def on_sync_finished(self, new_tokens):
         self.btn_sync.setEnabled(True)
@@ -1991,11 +1997,31 @@ class TestPlayWindow(QWidget):
         self.life += delta
         self.update_life_display()
         
+        if not hasattr(self, "_accumulated_life_delta"):
+            self._accumulated_life_delta = 0
+            
+        self._accumulated_life_delta += delta
+        
+        if not hasattr(self, "_life_log_timer"):
+            self._life_log_timer = QTimer(self)
+            self._life_log_timer.setSingleShot(True)
+            self._life_log_timer.timeout.connect(self._flush_life_log)
+            
+        # Restart the timer to wait 2 seconds from the LAST click
+        self._life_log_timer.start(2000)
+
+    def _flush_life_log(self):
+        delta = getattr(self, "_accumulated_life_delta", 0)
+        if delta == 0:
+            return
+            
         lang = self.language
         if delta > 0:
             self.log_action(UI_TEXT[lang]["log_life_inc"].format(n=delta))
         else:
             self.log_action(UI_TEXT[lang]["log_life_dec"].format(n=abs(delta)))
+            
+        self._accumulated_life_delta = 0
 
     def update_life_display(self):
         if hasattr(self, 'lbl_life_val'):
@@ -2272,12 +2298,18 @@ class TestPlayWindow(QWidget):
             for z in ["Library", "Graveyard", "Exile", "Command"]:
                 self.scene.arrange_stack(z)
             self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+            
+            # Auto-draw 1 card for Turn 1
+            QTimer.singleShot(500, lambda: self.draw_cards(1))
 
         QTimer.singleShot(200, final_layout)
 
 
     def reset_game(self):
-        ret = QMessageBox.question(self, "Confirm", "Reset the game and restart with Mulligan?", QMessageBox.Yes | QMessageBox.No)
+        lang = self.language
+        title = UI_TEXT[lang].get("reset_game_confirm_title", "Confirm")
+        msg = UI_TEXT[lang].get("reset_game_confirm_msg", "Reset the game and restart with Mulligan?")
+        ret = QMessageBox.question(self, title, msg, QMessageBox.Yes | QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
             

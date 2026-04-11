@@ -89,19 +89,46 @@ class SyncTokensWorker(QThread):
 class AutocompleteWorker(QThread):
     finished = pyqtSignal(list)
 
-    def __init__(self, query):
+    def __init__(self, query, language="ja"):
         super().__init__()
         self.query = query
+        self.language = language
 
     def run(self):
         try:
-            # Scryfall Autocomplete API
-            response = requests.get("https://api.scryfall.com/cards/autocomplete", params={"q": self.query}, timeout=3)
-            if response.status_code == 200:
-                data = response.json()
-                self.finished.emit(data.get("data", []))
+            if self.language == "ja":
+                # Scryfall Search API for Japanese
+                q_str = f'lang:ja name:"{self.query}"'
+                response = requests.get("https://api.scryfall.com/cards/search", params={"q": q_str}, timeout=3)
+                if response.status_code == 200:
+                    data = response.json().get("data", [])
+                    results = []
+                    for card in data:
+                        if "printed_name" in card:
+                            results.append(card["printed_name"])
+                        elif "card_faces" in card and "printed_name" in card["card_faces"][0]:
+                            results.append(card["card_faces"][0]["printed_name"])
+                        else:
+                            results.append(card["name"])
+                    
+                    seen = set()
+                    unique_results = []
+                    for name in results:
+                        if name not in seen:
+                            seen.add(name)
+                            unique_results.append(name)
+                    
+                    self.finished.emit(unique_results[:20])
+                else:
+                    self.finished.emit([])
             else:
-                self.finished.emit([])
+                # Scryfall Autocomplete API
+                response = requests.get("https://api.scryfall.com/cards/autocomplete", params={"q": self.query}, timeout=3)
+                if response.status_code == 200:
+                    data = response.json()
+                    self.finished.emit(data.get("data", []))
+                else:
+                    self.finished.emit([])
         except Exception:
             self.finished.emit([])
 
@@ -713,7 +740,7 @@ class DeckBuildingWindow(QWidget):
     def fetch_autocomplete(self):
         query = self.search_input.text().strip()
         if not query: return
-        self.auto_worker = AutocompleteWorker(query)
+        self.auto_worker = AutocompleteWorker(query, self.lang)
         self.auto_worker.finished.connect(self.on_autocomplete_finished)
         self.auto_worker.start()
 
