@@ -1,4 +1,4 @@
-﻿# main.py
+# main.py
 import sys
 import os
 import csv
@@ -34,6 +34,8 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 from config import APP_VERSION, EMOJI_DIR, UI_FONT_SIZE
 from common_func import strip_ruby, mana_symbol_to_filename, app_dir, exe_dir, set_app_icon, get_app_icon, set_window_icon_win32
 from gui_language import UI_TEXT, TYPE_LABELS
+from image_selector import ImageSelectDialog
+from image_selector import ImageSelectDialog
 
 DEBUG_LOG = True
 DEBUG_MODE = True

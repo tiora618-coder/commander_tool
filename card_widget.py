@@ -78,7 +78,8 @@ class CardWidget(QWidget):
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
         rect = QRectF(self.rect())
-        radius = 15.0 # Standard MTG corner ratio (7px/140px scaled to 300px height)
+        # Standard MTG corner ratio is approx 1/20th of the height (15px for a 300px card)
+        radius = rect.height() * 0.05
 
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)

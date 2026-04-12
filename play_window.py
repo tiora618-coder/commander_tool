@@ -155,8 +155,6 @@ class RoundedImageWidget(QWidget):
         if self.selected_index < n:
             draw_order.append(self.selected_index)
 
-        radius = 13.0
-
         for i in draw_order:
             pix = self.pixmaps[i]
             # Calculate fitting rect
@@ -165,6 +163,9 @@ class RoundedImageWidget(QWidget):
             
             card_w = target_size.width()
             card_h = target_size.height()
+
+            # Dynamic radius: approx 5% of height
+            radius = card_h * 0.05
 
             # Horizontal distribution
             if n <= 1:
