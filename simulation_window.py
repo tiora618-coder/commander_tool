@@ -29,7 +29,7 @@ class SimulationWindow(QWidget):
         self.initial_library = []
         for card in deck:
             if not (card.get("Commander_A") or card.get("Commander_B") or card.get("Companion")):
-                count = int(card.get("count", 1))
+                count = int(card.get("count") or 1)
                 for _ in range(count):
                     self.initial_library.append(card)
         

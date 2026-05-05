@@ -433,7 +433,7 @@ class SectionWidget(QWidget):
                 scale_height=scale_height, 
                 card_data=meta, 
                 header_text=h_text,
-                count=card.get("count", 1)
+                count=card.get("count") or 1
             )
             w.right_clicked.connect(callback)
             w.count_changed.connect(lambda val, c=card: self.on_count_changed(c, val))
@@ -471,7 +471,7 @@ class SectionWidget(QWidget):
             self.grid.addWidget(w, i // cols, i % cols)
 
     def update_title(self):
-        total_qty = sum(int(c.get("count", 1)) for c in self.cards_ref)
+        total_qty = sum(int(c.get("count") or 1) for c in self.cards_ref)
         suffix = " 枚" if self.lang == "ja" else " cards"
         self.title_label.setText(f"{self.title_base} {total_qty}{suffix}")
 
@@ -551,7 +551,7 @@ class DeckBuildingWindow(QWidget):
     def on_data_updated(self):
         # Update the Mainboard total label (if it exists)
         if hasattr(self, "mb_header"):
-            total_main = sum(int(c.get("count", 1)) for c in self.cards if not (c.get("Commander_A") or c.get("Commander_B") or c.get("Companion")))
+            total_main = sum(int(c.get("count") or 1) for c in self.cards if not (c.get("Commander_A") or c.get("Commander_B") or c.get("Companion")))
             suffix = " 枚" if self.lang == "ja" else " cards"
             self.mb_header.setText(f"{UI_TEXT[self.lang]['mainboard']} {total_main}{suffix}")
 
@@ -876,9 +876,9 @@ class DeckBuildingWindow(QWidget):
             c_a = [c for c in self.cards if bool(c.get("Commander_A"))]
             c_b = [c for c in self.cards if bool(c.get("Commander_B"))]
             for c in c_a:
-                lines.append(f"{c.get('count', 1)} {get_export_name(c)}")
+                lines.append(f"{c.get('count') or 1} {get_export_name(c)}")
             for c in c_b:
-                lines.append(f"{c.get('count', 1)} {get_export_name(c)}")
+                lines.append(f"{c.get('count') or 1} {get_export_name(c)}")
             
             lines.append("") # Blank line
             
@@ -888,16 +888,16 @@ class DeckBuildingWindow(QWidget):
             mainboard = [c for c in self.cards if c not in commander_list and c not in companions]
             
             for c in companions:
-                lines.append(f"{c.get('count', 1)} {get_export_name(c)}")
+                lines.append(f"{c.get('count') or 1} {get_export_name(c)}")
                 
             for c in mainboard:
-                lines.append(f"{c.get('count', 1)} {get_export_name(c)}")
+                lines.append(f"{c.get('count') or 1} {get_export_name(c)}")
                 
             lines.append("") # Blank line
 
             # 3. Considering
             for c in self.consideration_cards:
-                lines.append(f"{c.get('count', 1)} {get_export_name(c)}")
+                lines.append(f"{c.get('count') or 1} {get_export_name(c)}")
                 
             # Cleanup trailing blank lines if sections were empty
             while lines and lines[-1] == "":
@@ -1015,7 +1015,7 @@ class DeckBuildingWindow(QWidget):
                 
                 # 4. Update counts
                 # Decrement original count by 1 (if > 1)
-                curr_count = int(card.get("count", 1))
+                curr_count = int(card.get("count") or 1)
                 if curr_count > 1:
                     card["count"] = str(curr_count - 1)
                 
@@ -1053,7 +1053,7 @@ class DeckBuildingWindow(QWidget):
             if existing:
                 if not is_token:
                     # Increment count for normal cards
-                    curr = int(existing.get("count", 1))
+                    curr = int(existing.get("count") or 1)
                     existing["count"] = str(curr + 1)
                 # For tokens, we just skip adding it again
             else:
@@ -1246,7 +1246,7 @@ class DeckBuildingWindow(QWidget):
         self.content_layout.addWidget(top_row)
 
         # 2. Mainboard Header
-        total_main = sum(int(c.get("count", 1)) for c in creatures + spells + lands)
+        total_main = sum(int(c.get("count") or 1) for c in creatures + spells + lands)
         suffix = " 枚" if self.lang == "ja" else " cards"
         self.mb_header = QLabel(f"{UI_TEXT[self.lang]['mainboard']} {total_main}{suffix}")
         font = self.mb_header.font()

@@ -28,7 +28,8 @@ def load_deck_from_csv(csv_path: Path):
                 "Commander_A": row.get("Commander_A", "").strip(),
                 "Commander_B": row.get("Commander_B", "").strip(),
                 "Companion":   row.get("Companion", "").strip(),
-                "count":       row.get("count", "1").strip(),
+                "count":       (row.get("count") or "1").strip(),
+                "is_token":    row.get("is_token", "False").strip()
             }
 
             deck.append(card)

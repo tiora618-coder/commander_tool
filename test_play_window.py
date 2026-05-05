@@ -2100,7 +2100,7 @@ class TestPlayWindow(QWidget):
             if str(c.get("is_token")) == "True":
                 continue
 
-            count = int(c.get("count", 1))
+            count = int(c.get("count") or 1)
             # SimulationWindow expects unique-ish ids
             cid = c.get("id") or c.get("card_file_front", "Unknown")
             for j in range(count):
@@ -2169,7 +2169,7 @@ class TestPlayWindow(QWidget):
             if str(card_data.get("is_token")) == "True":
                 continue
 
-            count = int(card_data.get("count", 1))
+            count = int(card_data.get("count") or 1)
             
             for c_idx in range(count):
                 # Robust Commander check

@@ -872,8 +872,7 @@ def generate_from_txt(
                 
                 if existing:
                     if str(r.get("is_token")) != "True":
-                        c_curr = int(str(existing.get("count", 1)))
-                        existing["count"] = str(c_curr + int(str(r.get("count", 1))))
+                        existing["count"] = str(int(str(existing.get("count") or 1)) + int(str(r.get("count") or 1)))
                     # Skip duplicate tokens
                 else:
                     rows.append(r)
