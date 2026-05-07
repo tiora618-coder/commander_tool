@@ -145,6 +145,9 @@ UI_TEXT = {
         "zone_command": "統率者領域",
         "zone_battlefield": "戦場",
         "zone_lands": "土地領域",
+        "update_title": "アップデートのお知らせ",
+        "update_message": "新しいバージョン ({new_version}) がリリースされています。\n現在のバージョン: {current_version}",
+        "update_link": "こちらからダウンロードしてください:\n{url}",
     },
     "en": {
         "language": "Language:",
@@ -284,6 +287,9 @@ UI_TEXT = {
         "zone_command": "Command",
         "zone_battlefield": "Battlefield",
         "zone_lands": "Lands",
+        "update_title": "Update Available",
+        "update_message": "A new version ({new_version}) is available!\nCurrent version: {current_version}",
+        "update_link": "Please download it from:\n{url}",
     }
 }
 

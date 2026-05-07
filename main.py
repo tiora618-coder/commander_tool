@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QMenu, QCheckBox, QFrame, QGridLayout, QScrollArea, QMainWindow,
     QGraphicsProxyWidget, QGraphicsView, QGraphicsScene
 )
-from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer, QSortFilterProxyModel, QRunnable, QObject, pyqtSignal, QThreadPool
+from PyQt5.QtCore import Qt, QUrl, QSize, QPoint, QTimer, QSortFilterProxyModel, QRunnable, QObject, pyqtSignal, QThreadPool, QThread
 from PyQt5.QtGui import (
     QTextDocument, QPixmap, QFont, QFontMetrics, QIcon, QImage, QPalette, QColor, QFontInfo
 )
@@ -116,6 +116,33 @@ PlayWindow = None
 DeckBuildingWindow = None
 TestPlayWindow = None
 mulligan_simulator = None
+
+class VersionCheckThread(QThread):
+    update_available = pyqtSignal(str, str)
+
+    def run(self):
+        try:
+            url = "https://api.github.com/repos/tiora618-coder/commander_tool/releases/latest"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                tag_name = data.get("tag_name", "")
+                html_url = data.get("html_url", "")
+                
+                latest_version = tag_name.lstrip('vV')
+                current_version = APP_VERSION.lstrip('vV')
+                
+                def parse_version(v):
+                    return tuple(map(int, (v.split("."))))
+                
+                try:
+                    if parse_version(latest_version) > parse_version(current_version):
+                        self.update_available.emit(latest_version, html_url)
+                except ValueError:
+                    if latest_version != current_version and latest_version > current_version:
+                        self.update_available.emit(latest_version, html_url)
+        except Exception as e:
+            logging.error(f"Version check failed: {e}")
 
 def get_display_type(type_line: str, lang: str) -> str:
     if not type_line:
@@ -651,6 +678,29 @@ class MainWindow(QWidget):
 
         if DEBUG_MODE:
             QTimer.singleShot(100, self.load_debug_csv)
+
+        QTimer.singleShot(500, self.check_for_updates)
+
+    def check_for_updates(self):
+        self.version_thread = VersionCheckThread()
+        self.version_thread.update_available.connect(self.show_update_dialog)
+        self.version_thread.start()
+
+    def show_update_dialog(self, new_version, release_url):
+        msg = QMessageBox(self)
+        msg.setWindowTitle(UI_TEXT[self.language].get("update_title", "Update Available"))
+        
+        main_text = UI_TEXT[self.language].get("update_message", "A new version ({new_version}) is available!\nCurrent version: {current_version}").format(new_version=new_version, current_version=APP_VERSION)
+        msg.setText(main_text.replace('\n', '<br>'))
+        
+        link_html = f'<a href="{release_url}">{release_url}</a>'
+        info_text = UI_TEXT[self.language].get("update_link", "Please download it from:\n{url}").format(url=link_html)
+        msg.setInformativeText(info_text.replace('\n', '<br>'))
+        
+        msg.setTextFormat(Qt.RichText)
+        msg.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
 
     def load_debug_csv(self):
         # Using the relative path provided by the user
