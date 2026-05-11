@@ -13,6 +13,7 @@ from gui_language import UI_TEXT, TYPE_LABELS
 from common_func import app_dir, get_app_icon
 import generator
 from image_selector import ImageSelectDialog
+from proxy_pdf_dialog import ProxyPDFPreviewDialog
 
 class AddCardWorker(QThread):
     finished = pyqtSignal(list) # list of row dicts
@@ -343,7 +344,7 @@ class MiniCardWidget(QWidget):
         self.position_qty_overlay()
 
     def decrement(self):
-        if self.count > 0:
+        if self.count > 1:
             self.count -= 1
             self.qty_label.setText(str(self.count))
             self.count_changed.emit(self.count)
@@ -501,6 +502,10 @@ class DeckBuildingWindow(QWidget):
         QTimer.singleShot(1500, lambda: self.setWindowIcon(get_app_icon()))
 
         self.cards = cards # Main Cards (reference from main window)
+        for c in self.cards:
+            if str(c.get("count", "")) == "0":
+                c["count"] = "1"
+                
         self.consideration_cards = []
         self.lang = language
         self.image_dir = image_dir
@@ -615,6 +620,22 @@ class DeckBuildingWindow(QWidget):
         """)
         r1_layout.addWidget(self.sync_btn, 1)
 
+        # Proxy PDF Output Button
+        self.export_proxy_btn = QPushButton(UI_TEXT[self.lang].get("export_proxy_pdf", "Export Proxy PDF"))
+        self.export_proxy_btn.clicked.connect(self.on_export_proxy_pdf_clicked)
+        self.export_proxy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e8b57;
+                color: white;
+                font-weight: bold;
+                padding: 8px 20px;
+                border-radius: 4px;
+                border: 1px solid #3cb371;
+            }
+            QPushButton:hover { background-color: #3cb371; }
+        """)
+        r1_layout.addWidget(self.export_proxy_btn, 1)
+
         self.main_layout.addWidget(row1)
 
         # 2nd row: Search and Add (formerly 1st)
@@ -664,6 +685,9 @@ class DeckBuildingWindow(QWidget):
         try:
             with open(self.consideration_csv_path, encoding="utf-8") as f:
                 self.consideration_cards = list(csv.DictReader(f))
+                for c in self.consideration_cards:
+                    if str(c.get("count", "")) == "0":
+                        c["count"] = "1"
         except Exception as e:
             logging.error(f"Error loading consideration CSV: {e}")
 
@@ -853,8 +877,16 @@ class DeckBuildingWindow(QWidget):
         self.dest_combo.setItemText(0, UI_TEXT[self.lang]["mainboard"])
         self.dest_combo.setItemText(1, UI_TEXT[self.lang]["considering"])
         self.export_btn.setText(UI_TEXT[self.lang]["export_txt"])
+        self.export_proxy_btn.setText(UI_TEXT[self.lang].get("export_proxy_pdf", "Export Proxy PDF"))
         
         self.refresh_ui()
+
+    def on_export_proxy_pdf_clicked(self):
+        dialog = ProxyPDFPreviewDialog(
+            self.cards, self.image_dir, self.lang, self.csv_path, self,
+            consideration_cards=self.consideration_cards
+        )
+        dialog.exec_()
 
     def export_to_txt(self):
         from PyQt5.QtWidgets import QFileDialog

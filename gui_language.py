@@ -148,6 +148,10 @@ UI_TEXT = {
         "update_title": "アップデートのお知らせ",
         "update_message": "新しいバージョン ({new_version}) がリリースされています。\n現在のバージョン: {current_version}",
         "update_link": "こちらからダウンロードしてください:\n{url}",
+        "export_proxy_pdf": "Proxy PDF出力",
+        "proxy_pdf_preview": "PDFプレビュー",
+        "card_spacing_mm": "カード間隔 (mm):",
+        "export_pdf": "PDFを出力",
     },
     "en": {
         "language": "Language:",
@@ -290,6 +294,10 @@ UI_TEXT = {
         "update_title": "Update Available",
         "update_message": "A new version ({new_version}) is available!\nCurrent version: {current_version}",
         "update_link": "Please download it from:\n{url}",
+        "export_proxy_pdf": "Export Proxy PDF",
+        "proxy_pdf_preview": "Proxy PDF Preview",
+        "card_spacing_mm": "Card Spacing (mm):",
+        "export_pdf": "Export PDF",
     }
 }
 
