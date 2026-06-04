@@ -3,8 +3,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame, QGridLayout,
     QLineEdit, QComboBox, QPushButton, QMessageBox, QCompleter, QMenu
 )
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QTimer, QStringListModel, QPoint, QRectF
-from PyQt5.QtGui import QPixmap, QFont, QIcon, QPainter, QPainterPath, QColor
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QTimer, QStringListModel, QPoint, QRectF, QEvent
+from PyQt5.QtGui import QPixmap, QFont, QIcon, QPainter, QPainterPath, QColor, QCursor
 from pathlib import Path
 import requests
 import csv
@@ -19,16 +19,17 @@ class AddCardWorker(QThread):
     finished = pyqtSignal(list) # list of row dicts
     error = pyqtSignal(str)
 
-    def __init__(self, card_name, out_dir, language):
+    def __init__(self, card_name, out_dir, language, name_en=None):
         super().__init__()
         self.card_name = card_name
         self.out_dir = out_dir
         self.language = language
+        self.name_en = name_en
 
     def run(self):
         try:
             # create_card_row now returns a tuple: (list [main_card, token1, ...], is_cached)
-            result = generator.create_card_row(self.card_name, self.out_dir, self.language)
+            result = generator.create_card_row(self.card_name, self.out_dir, self.language, name_en=self.name_en)
             rows = result[0] if isinstance(result, tuple) else result
             
             if rows:
@@ -88,7 +89,7 @@ class SyncTokensWorker(QThread):
             self.error.emit(str(e))
 
 class AutocompleteWorker(QThread):
-    finished = pyqtSignal(list)
+    finished = pyqtSignal(list, str)
 
     def __init__(self, query, language="ja"):
         super().__init__()
@@ -97,41 +98,10 @@ class AutocompleteWorker(QThread):
 
     def run(self):
         try:
-            if self.language == "ja":
-                # Scryfall Search API for Japanese
-                q_str = f'lang:ja name:"{self.query}"'
-                response = requests.get("https://api.scryfall.com/cards/search", params={"q": q_str}, timeout=3)
-                if response.status_code == 200:
-                    data = response.json().get("data", [])
-                    results = []
-                    for card in data:
-                        if "printed_name" in card:
-                            results.append(card["printed_name"])
-                        elif "card_faces" in card and "printed_name" in card["card_faces"][0]:
-                            results.append(card["card_faces"][0]["printed_name"])
-                        else:
-                            results.append(card["name"])
-                    
-                    seen = set()
-                    unique_results = []
-                    for name in results:
-                        if name not in seen:
-                            seen.add(name)
-                            unique_results.append(name)
-                    
-                    self.finished.emit(unique_results[:20])
-                else:
-                    self.finished.emit([])
-            else:
-                # Scryfall Autocomplete API
-                response = requests.get("https://api.scryfall.com/cards/autocomplete", params={"q": self.query}, timeout=3)
-                if response.status_code == 200:
-                    data = response.json()
-                    self.finished.emit(data.get("data", []))
-                else:
-                    self.finished.emit([])
+            results = generator.get_card_autocomplete(self.query)
+            self.finished.emit(results, self.query)
         except Exception:
-            self.finished.emit([])
+            self.finished.emit([], self.query)
 
 class RoundedImageLabel(QLabel):
     def __init__(self, radius=12, parent=None):
@@ -183,9 +153,34 @@ class HoverPreviewPopup(QFrame):
             lbl.hide()
             self.layout.addWidget(lbl)
 
+        self.source_widget = None
+        self.check_timer = QTimer(self)
+        self.check_timer.setInterval(150)  # Check every 150ms
+        self.check_timer.timeout.connect(self.check_hover)
+
         self.hide()
 
-    def show_card(self, image_dir, card_meta, global_pos):
+    def check_hover(self):
+        if not self.isVisible():
+            self.check_timer.stop()
+            return
+        if not self.source_widget:
+            self.hide()
+            self.check_timer.stop()
+            return
+
+        global_mouse_pos = QCursor.pos()
+        local_mouse_pos = self.source_widget.mapFromGlobal(global_mouse_pos)
+        if not self.source_widget.isVisible() or not self.source_widget.rect().contains(local_mouse_pos):
+            self.hide()
+            self.check_timer.stop()
+
+    def hideEvent(self, event):
+        self.check_timer.stop()
+        super().hideEvent(event)
+
+    def show_card(self, image_dir, card_meta, global_pos, source_widget):
+        self.source_widget = source_widget
         card = card_meta.get("card", {})
         front_file = card.get("card_file_front")
         back_file = card.get("card_file_back")
@@ -205,6 +200,7 @@ class HoverPreviewPopup(QFrame):
 
         if not pixmaps:
             self.hide()
+            self.check_timer.stop()
             return
 
         # Width: 488, Height: 680 (Standard Scryfall 'normal')
@@ -243,11 +239,12 @@ class HoverPreviewPopup(QFrame):
 
         self.move(target_x, target_y)
         self.show()
+        self.check_timer.start()
 
 class MiniCardWidget(QWidget):
     right_clicked = pyqtSignal(QPoint)
     count_changed = pyqtSignal(int)
-    hover_entered = pyqtSignal(dict, QPoint) # meta, global_pos
+    hover_entered = pyqtSignal(object, dict, QPoint) # widget, meta, global_pos
     hover_left = pyqtSignal()
 
     def __init__(self, img_path: Path, tool_tip="", scale_height=180, card_data=None, header_text="", count=1):
@@ -380,7 +377,7 @@ class MiniCardWidget(QWidget):
 
     def enterEvent(self, event):
         if self.card_data:
-            self.hover_entered.emit(self.card_data, self.mapToGlobal(self.rect().bottomRight()))
+            self.hover_entered.emit(self, self.card_data, self.mapToGlobal(self.rect().bottomRight()))
         super().enterEvent(event)
 
     def leaveEvent(self, event):
@@ -388,7 +385,7 @@ class MiniCardWidget(QWidget):
         super().leaveEvent(event)
 
 class SectionWidget(QWidget):
-    hover_entered = pyqtSignal(dict, QPoint)
+    hover_entered = pyqtSignal(object, dict, QPoint)
     hover_left = pyqtSignal()
 
     def __init__(self, title, cards, image_dir, lang="ja", col_count=5, scale_height=270, section_key="main", callback=None, card_labels=None):
@@ -510,6 +507,22 @@ class DeckBuildingWindow(QWidget):
         self.lang = language
         self.image_dir = image_dir
 
+        self.add_queue = []
+        self.active_add_worker = None
+        self.task_widgets = {}
+        self.task_counter = 0
+        
+        self.ui_needs_refresh = False
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self.check_and_refresh_ui)
+
+        # Debounce timer for data changes (saves and external UI updates)
+        self.data_debounce_timer = QTimer(self)
+        self.data_debounce_timer.setSingleShot(True)
+        self.data_debounce_timer.setInterval(500) # Wait 500ms before saving/syncing
+        self.data_debounce_timer.timeout.connect(self.on_data_updated)
+
         self.preview_popup = HoverPreviewPopup(self)
 
         self.main_layout = QVBoxLayout(self)
@@ -548,7 +561,7 @@ class DeckBuildingWindow(QWidget):
         
         self.main_layout.addWidget(self.scroll)
 
-        self.data_changed.connect(self.on_data_updated)
+        self.data_changed.connect(lambda: self.data_debounce_timer.start())
 
         self.load_considerations()
         self.build_sections()
@@ -556,16 +569,37 @@ class DeckBuildingWindow(QWidget):
     def on_data_updated(self):
         # Update the Mainboard total label (if it exists)
         if hasattr(self, "mb_header"):
-            total_main = sum(int(c.get("count") or 1) for c in self.cards if not (c.get("Commander_A") or c.get("Commander_B") or c.get("Companion")))
+            total_main = sum(int(c.get("count") or 1) for c in self.cards if not (c.get("Commander_A") or c.get("Commander_B") or c.get("Companion")) and str(c.get("is_token")) != "True")
             suffix = " 枚" if self.lang == "ja" else " cards"
             self.mb_header.setText(f"{UI_TEXT[self.lang]['mainboard']} {total_main}{suffix}")
 
-        # MainWindow usually handles the actual saving, but we can do it here if we have context
-        # In main.py: launch_deck_building connects this or similar
-        # Let's ensure MainWindow's save_current_csv is called.
+        # Save to disk
+        self.save_csvs()
+
+        # Also notify parent MainWindow if it exists (for its own GUI update)
         parent = self.parent()
         if hasattr(parent, "save_current_csv"):
             parent.save_current_csv()
+
+    def eventFilter(self, obj, event):
+        if obj == self.search_input and event.type() == QEvent.FocusOut:
+            self.check_and_refresh_ui()
+        return super().eventFilter(obj, event)
+
+    def check_and_refresh_ui(self):
+        """Refreshes the UI if needed, unless the user is still typing."""
+        if not getattr(self, "ui_needs_refresh", False):
+            return
+            
+        # Don't refresh if search has focus or completer is visible
+        if self.search_input.hasFocus():
+            if self.completer and self.completer.popup() and self.completer.popup().isVisible():
+                # Still typing, defer again
+                self.refresh_timer.start(2000) 
+                return
+            
+        self.refresh_ui()
+        self.ui_needs_refresh = False
 
     def setup_header(self):
         # 1st row: Language and Export (formerly 2nd)
@@ -649,7 +683,8 @@ class DeckBuildingWindow(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(UI_TEXT[self.lang]["search_card_placeholder"])
         self.search_input.setStyleSheet("padding: 8px; background: #252525; color: white; border: 1px solid #555; border-radius: 4px;")
-        self.search_input.returnPressed.connect(self.on_add_clicked)
+        self.search_input.returnPressed.connect(self.on_return_pressed)
+        self.search_input.installEventFilter(self)
         r2_layout.addWidget(self.search_input, 4)
 
         # Destination dropdown
@@ -678,6 +713,8 @@ class DeckBuildingWindow(QWidget):
         r2_layout.addWidget(self.add_btn, 1)
 
         self.main_layout.addWidget(row2)
+
+
 
     def load_considerations(self):
         if not self.consideration_csv_path or not self.consideration_csv_path.exists():
@@ -741,21 +778,85 @@ class DeckBuildingWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save CSV {path.name}:\n{e}")
 
-    def on_add_clicked(self):
+    def on_return_pressed(self):
+        # If the completer popup is visible and an item is highlighted by the user (e.g. via arrow keys),
+        # we ignore the returnPressed signal to prevent queuing the partial typed text.
+        # The QCompleter's 'activated' signal will fire immediately after this and handle the addition.
+        if self.completer and self.completer.popup() and self.completer.popup().isVisible():
+            if self.completer.popup().currentIndex().isValid():
+                return
+        self.on_add_clicked()
+
+    def on_add_clicked(self, name_en=None):
         name = self.search_input.text().strip()
         if not name: return
 
         self.autocomplete_timer.stop() # Stop any pending autocomplete
-        self.add_btn.setEnabled(False)
-        self.search_input.setEnabled(False)
-        self.search_input.setPlaceholderText(UI_TEXT[self.lang]["search_adding"])
+        
+        # Clear instantly to prevent subsequent returnPressed signals from double-queuing
+        self.search_input.setText("")
+        # Use QTimer to clear text so it runs after QCompleter's internal text-setting logic
+        QTimer.singleShot(0, self.search_input.clear)
+        
+        dest = self.dest_combo.currentData()
+        
+        self.task_counter += 1
+        task_id = self.task_counter
+        
+        # Create and show notification widget as a floating overlay
+        widget = QFrame(self)
+        widget.setStyleSheet("background: #333; border: 1px solid #555; border-radius: 4px;")
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(10, 5, 10, 5)
+        label = QLabel(f"{UI_TEXT[self.lang]['search_adding']}: {name} ...")
+        label.setStyleSheet("color: white; border: none; font-weight: bold;")
+        layout.addWidget(label)
+        
+        widget.adjustSize()
+        x_pos = self.width() - widget.width() - 20
+        y_pos = 20 + len(self.task_widgets) * (widget.height() + 5)
+        widget.move(x_pos, y_pos)
+        widget.show()
+        
+        self.task_widgets[task_id] = {"widget": widget, "label": label}
+        self.add_queue.append((task_id, name, dest, name_en))
+        
+        self.process_next_add_task()
 
-        self.worker = AddCardWorker(name, self.image_dir, self.lang)
-        self.worker.finished.connect(self.on_card_fetched)
-        self.worker.error.connect(self.on_card_error)
-        self.worker.start()
+    def process_next_add_task(self):
+        if self.active_add_worker is not None:
+            return # Already processing
+            
+        if not self.add_queue:
+            return # Queue empty
+            
+        task_id, name, dest, name_en = self.add_queue.pop(0)
+        self.current_task_id = task_id
+        self.current_task_dest = dest
+        
+        self.active_add_worker = AddCardWorker(name, self.image_dir, self.lang, name_en=name_en)
+        self.active_add_worker.finished.connect(self.on_card_fetched)
+        self.active_add_worker.error.connect(self.on_card_error)
+        self.active_add_worker.start()
+
+    def finish_current_task(self):
+        task_id = self.current_task_id
+        if task_id in self.task_widgets:
+            widget_dict = self.task_widgets.pop(task_id)
+            widget = widget_dict["widget"]
+            widget.deleteLater()
+            
+        self.active_add_worker = None
+        self.process_next_add_task()
 
     def on_search_text_changed(self, text):
+        if not text:
+            if getattr(self, "ui_needs_refresh", False):
+                self.refresh_ui()
+                self.ui_needs_refresh = False
+            self.completer_model.setStringList([])
+            return
+
         if len(text) < 2:
             self.completer_model.setStringList([])
             return
@@ -770,15 +871,22 @@ class DeckBuildingWindow(QWidget):
 
     def on_completer_activated(self, text):
         """Automatically called when a user selects an item from the autocomplete list."""
+        en_name = getattr(self, "autocomplete_mapping", {}).get(text)
         self.search_input.setText(text)
-        self.on_add_clicked()
+        self.on_add_clicked(name_en=en_name)
 
-    def on_autocomplete_finished(self, results):
+    def on_autocomplete_finished(self, results, query):
+        if query != self.search_input.text().strip():
+            # Ignore stale results from older queries
+            return
+
         if not results:
             self.completer.popup().hide()
             return
             
-        self.completer_model.setStringList(results)
+        # results is a list of (display_name, english_name) tuples
+        self.autocomplete_mapping = {display: en for display, en in results}
+        self.completer_model.setStringList([r[0] for r in results])
         # Re-trigger the completer to show the updated list
         self.completer.complete()
 
@@ -1073,7 +1181,7 @@ class DeckBuildingWindow(QWidget):
         if not isinstance(rows, list):
             rows = [rows]
 
-        dest = self.dest_combo.currentData()
+        dest = self.current_task_dest
         for row in rows:
             row["Commander_A"] = ""
             row["Commander_B"] = ""
@@ -1100,12 +1208,27 @@ class DeckBuildingWindow(QWidget):
                         self.consideration_cards.append(row)
         
         self.save_csvs()
-        self.refresh_ui()
+        
+        # Robust check to see if user is interacting with the search box
+        is_typing = self.search_input.hasFocus()
+        if self.completer and self.completer.popup() and self.completer.popup().isVisible():
+            is_typing = True
 
-        self.add_btn.setEnabled(True)
-        self.search_input.setEnabled(True)
-        self.search_input.setText("")
-        self.search_input.setPlaceholderText(UI_TEXT[self.lang]["search_card_placeholder"])
+        # Defer UI refresh if the user is currently typing to avoid IME interruption
+        if is_typing:
+            self.ui_needs_refresh = True
+            self.refresh_timer.start(3000) # Auto-refresh after 3 seconds of inactivity
+            
+            # Optionally update the total mainboard count dynamically if it exists
+            if hasattr(self, "mb_header"):
+                total_main = sum(int(c.get("count") or 1) for c in self.cards if not (c.get("Commander_A") or c.get("Commander_B") or c.get("Companion")) and str(c.get("is_token")) != "True")
+                suffix = " 枚" if self.lang == "ja" else " cards"
+                self.mb_header.setText(f"{UI_TEXT[self.lang]['mainboard']} {total_main}{suffix}")
+        else:
+            self.refresh_ui()
+            self.ui_needs_refresh = False
+
+        self.finish_current_task()
 
     def on_sync_tokens_clicked(self):
         self.sync_btn.setEnabled(False)
@@ -1169,8 +1292,8 @@ class DeckBuildingWindow(QWidget):
                         except Exception as e:
                             logging.error(f"Failed to delete {fname}: {e}")
 
-        # 5. Update state
-        self.cards = other_cards + tokens_to_keep + tokens_to_add
+        # 5. Update state (using slice assignment to preserve reference to MainWindow's list)
+        self.cards[:] = other_cards + tokens_to_keep + tokens_to_add
         
         self.save_csvs()
         self.refresh_ui()
@@ -1179,12 +1302,22 @@ class DeckBuildingWindow(QWidget):
         QMessageBox.information(self, "Sync", summary)
 
     def on_card_error(self, err_msg):
-        QMessageBox.warning(self, "Error", err_msg)
-        self.add_btn.setEnabled(True)
-        self.search_input.setEnabled(True)
-        self.search_input.setPlaceholderText(UI_TEXT[self.lang]["search_card_placeholder"])
+        task_id = self.current_task_id
+        if task_id in self.task_widgets:
+            widget_dict = self.task_widgets[task_id]
+            label = widget_dict["label"]
+            label.setText(f"Error: {err_msg}")
+            label.setStyleSheet("color: #ff5555; border: none; font-weight: bold;")
+            
+            # Keep the error visible for a bit before finishing
+            QTimer.singleShot(2500, self.finish_current_task)
+        else:
+            self.finish_current_task()
 
     def refresh_ui(self):
+        # 0. Check if search_input has focus
+        search_had_focus = self.search_input.hasFocus()
+
         # 1. Update static UI elements
         self.retranslate_ui()
         
@@ -1194,6 +1327,10 @@ class DeckBuildingWindow(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self.build_sections()
+
+        # 3. Restore focus
+        if search_had_focus:
+            self.search_input.setFocus()
 
     def retranslate_ui(self):
         """Update all static UI elements with the current language."""
@@ -1210,8 +1347,8 @@ class DeckBuildingWindow(QWidget):
         self.dest_combo.setItemText(1, UI_TEXT[self.lang]["considering"])
         self.add_btn.setText(UI_TEXT[self.lang]["add"])
 
-    def on_hover_preview(self, card_meta, global_pos):
-        self.preview_popup.show_card(self.image_dir, card_meta, global_pos)
+    def on_hover_preview(self, widget, card_meta, global_pos):
+        self.preview_popup.show_card(self.image_dir, card_meta, global_pos, widget)
 
     def on_hover_hide(self):
         self.preview_popup.hide()

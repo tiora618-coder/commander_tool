@@ -14,6 +14,8 @@ from PyQt5.QtCore import pyqtSignal
 import re
 import collections
 from datetime import datetime
+def looks_japanese(text: str) -> bool:
+    return bool(re.search(r"[ぁ-んァ-ン一-龯ー]", text))
 
 PHYREXIAN_MAP = {
     "(W/P)": "{W/P}",
@@ -363,12 +365,43 @@ class PlayWindow(QWidget):
                     self.image.setPixmap(pix)
 
         lang = self.language
-        key = (
-            f"text_front_{lang}"
-            if self.face == "front"
-            else f"text_back_{lang}"
-        )
-        text = self.card.get(key, "")
+        text_front = self.card.get(f"text_front_{lang}", "") or ""
+        text_back = self.card.get(f"text_back_{lang}", "") or ""
+
+        # If the card has no back physical image (i.e. cannot be flipped),
+        # but has back face rules text (e.g. Prepare spells, Rooms, Adventures),
+        # we combine front and back texts into one block.
+        if not self.card.get("card_file_back") and text_back:
+            back_title = self.card.get("name_back", "")
+            # Fallback to name_ja split for prepare/double-face cards if back_title is English but language is ja
+            if lang == "ja" and back_title and not looks_japanese(back_title):
+                name_ja = self.card.get("name_ja", "")
+                if " // " in name_ja:
+                    parts = name_ja.split(" // ")
+                    if len(parts) >= 2:
+                        back_title = parts[1]
+
+            back_type = self.card.get("type_back", "")
+            # Translate back face type if possible
+            if back_type and lang in TYPE_LABELS:
+                for en_t, ja_t in TYPE_LABELS[lang].items():
+                    if en_t in back_type:
+                        back_type = back_type.replace(en_t, ja_t)
+            
+            back_header = ""
+            if back_title:
+                back_header = f"\n\n★ {back_title}"
+                if back_type:
+                    back_header += f" ({back_type})"
+                back_header += "\n"
+                
+            text = f"{text_front}{back_header}{text_back}"
+        else:
+            text = (
+                text_front
+                if self.face == "front"
+                else text_back
+            )
 
         font_pt = self.text_font.pointSize()
         icon_px = int(font_pt * 1.5)   

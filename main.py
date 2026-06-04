@@ -1027,7 +1027,7 @@ class MainWindow(QWidget):
 
             # Sort cards before assigning to self.cards
             temp_cards = sort_cards(temp_cards)
-            self.cards = temp_cards
+            self.cards[:] = temp_cards
             
             if needs_save:
                 self.save_current_csv()
@@ -1194,7 +1194,8 @@ class MainWindow(QWidget):
             return
 
         self.deck_building_win = DeckBuildingWindow(self.cards, self.image_dir, self.language, csv_path=self.csv_path)
-        self.deck_building_win.data_changed.connect(self.apply_filter)
+        self.deck_building_win.setParent(self, Qt.Window)
+        self.deck_building_win.data_changed.connect(self.apply_filter, Qt.QueuedConnection)
         self.deck_building_win.show()
 
     def launch_test_play(self):
@@ -1209,6 +1210,7 @@ class MainWindow(QWidget):
         # Create TestPlayWindow
         deck_name = self.csv_path.stem
         self.test_play_window = TestPlayWindow(self.cards, deck_name, self.language, image_root=self.csv_path.parent, csv_path=self.csv_path)
+        self.test_play_window.setParent(self, Qt.Window)
         self.test_play_window.show()
 
 
@@ -1344,7 +1346,7 @@ class MainWindow(QWidget):
         final_fieldnames = [f for f in fieldnames if f in all_card_keys]
 
         # Sort cards before saving
-        self.cards = sort_cards(self.cards)
+        self.cards[:] = sort_cards(self.cards)
 
         with self.csv_path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=final_fieldnames, quoting=csv.QUOTE_ALL)

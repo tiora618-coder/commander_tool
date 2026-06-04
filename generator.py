@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from requests.exceptions import RequestException, Timeout
 import json
-from wisdomguild_scraper import fetch_text_from_wisdom_guild
+from wisdomguild_scraper import fetch_text_from_wisdom_guild, fetch_english_name_by_japanese
 from common_func import exe_dir
 import logging
 logger = logging.getLogger(__name__)
@@ -248,7 +248,40 @@ def fetch_card(card_name: str, lang: str = "ja"):
             break
 
     if not base:
-        logger.warning(f"[WARN] fetch_card failed: {card_name}")
+        # Fallback to search API if named endpoint fails (often happens with Japanese names with punctuation)
+        # V21.3: Use lang:any to ensure we find the card regardless of language
+        query = f'name:"{card_name}"' if " " in card_name or "、" in card_name else f'! "{card_name}"'
+        r = safe_get(
+            session,
+            "https://api.scryfall.com/cards/search",
+            params={"q": f"{query} lang:any", "include_extras": "true"},
+            timeout=5,
+        )
+        if r and r.status_code == 200:
+            data = r.json()
+            if data.get("total_cards", 0) > 0:
+                base = data["data"][0]
+                logger.info(f"[INFO] fetch_card fallback search success: {card_name} -> {base.get('name')}")
+
+    if not base:
+        logger.warning(f"[WARN] fetch_card failed on Scryfall: {card_name}")
+        # Final Fallback: Ask Wisdom Guild for the English name
+        if looks_japanese(card_name):
+            en_name = fetch_english_name_by_japanese(card_name)
+            if en_name:
+                logger.info(f"[INFO] Wisdom Guild resolved English name: {card_name} -> {en_name}")
+                # Try Scryfall one last time with the English name
+                r = safe_get(
+                    session,
+                    SCRYFALL_NAMED_URL,
+                    params={"exact": en_name},
+                    timeout=5,
+                )
+                if r and r.status_code == 200:
+                    base = r.json()
+        
+    if not base:
+        logger.warning(f"[WARN] fetch_card failed completely: {card_name}")
         return None
 
     # --- Prefer Japanese ---
@@ -273,14 +306,25 @@ def fetch_card(card_name: str, lang: str = "ja"):
         return base
 
     # --- English specified ---
+    if lang == "en" and base.get("lang") != "en":
+        en_name = base.get("name")
+        if en_name and en_name != card_name:
+            r = safe_get(
+                session,
+                SCRYFALL_NAMED_URL,
+                params={"exact": en_name},
+                timeout=5,
+            )
+            if r and r.status_code == 200:
+                base = r.json()
     return base
 
 
 
 
 def download_image(url: str, path: Path):
-    # Skip if the file already exists
-    if path.exists():
+    # Skip if the file already exists and has content
+    if path.exists() and path.stat().st_size > 0:
         return False   # Not downloaded
 
     r = requests.get(url)
@@ -555,10 +599,11 @@ def get_card_name(card, lang: str = "ja"):
                 return jp_name
 
 
-    # ---- Adventure / MDFC ----
+    # ---- Adventure / MDFC / Prepare ----
     if "card_faces" in card:
         names = []
         has_english = False
+        en_name = card["name"]
 
         for face in card["card_faces"]:
             pn = face.get("printed_name")
@@ -569,13 +614,14 @@ def get_card_name(card, lang: str = "ja"):
 
         if has_english:
             names = []
-            en_name = card["name"]
-            [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en_name, "front")
+            [jp_name, _] = fetch_text_from_wisdom_guild(en_name, "front")
             names.append(jp_name)
-            [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en_name, "back")
+            [jp_name, _] = fetch_text_from_wisdom_guild(en_name, "back")
             names.append(jp_name)
-        
-        if looks_japanese(" // ".join(names)):
+
+        # For prepare spells: only keep non-empty names
+        names = [n for n in names if n]
+        if names and looks_japanese(" // ".join(names)):
             return " // ".join(names)
 
     return card.get("name", "")
@@ -604,10 +650,11 @@ def get_card_autocomplete(query: str) -> list:
             results = []
             for card in data:
                 # Prioritize Japanese printed name
-                name = card.get("printed_name") or card["name"]
-                if name not in results:
-                    results.append(name)
-            logger.info(f"Autocomplete JA: {query} -> {results[:5]}")
+                display_name = card.get("printed_name") or card["name"]
+                english_name = card["name"]
+                if (display_name, english_name) not in results:
+                    results.append((display_name, english_name))
+            logger.info(f"Autocomplete JA: {query} -> {[r[0] for r in results[:5]]}")
             return results[:20] # Limit suggestions
         return []
     else:
@@ -619,7 +666,8 @@ def get_card_autocomplete(query: str) -> list:
             timeout=3
         )
         if r and r.status_code == 200:
-            return r.json().get("data", [])
+            names = r.json().get("data", [])
+            return [(n, n) for n in names]
     
     return []
 
@@ -645,20 +693,24 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
     if not is_token and card_en is None:
         if search_name in _token_cache:
             entry = _token_cache[search_name]
-            if entry is not None:
+            if entry is not None and entry.get("main") is not None:
                 # V21.2: If we have full results cached, check if expected images exist.
                 # This skips ALL network calls, including text fallback and token recursion.
                 if "results" in entry and entry["results"]:
                     all_exist = True
                     for r in entry["results"]:
                         front = r.get("card_file_front")
-                        if front and not (out_dir / front).exists():
-                            all_exist = False
-                            break
+                        if front:
+                            fpath = out_dir / front
+                            if not fpath.exists() or fpath.stat().st_size == 0:
+                                all_exist = False
+                                break
                         back = r.get("card_file_back")
-                        if back and not (out_dir / back).exists():
-                            all_exist = False
-                            break
+                        if back:
+                            bpath = out_dir / back
+                            if not bpath.exists() or bpath.stat().st_size == 0:
+                                all_exist = False
+                                break
                     if all_exist:
                         logger.info(f"[INFO] Full result cache hit with images: {search_name}")
                         return entry["results"], True
@@ -670,8 +722,6 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
                 card_ja = entry.get("main_ja")
                 is_cached = True
                 logger.info(f"[INFO] Partial token cache hit: {search_name}")
-                if card_en is None and not tokens:
-                    return [], True
 
     if not card_en:
         # 1. Fetch Master English Card for metadata logic
@@ -736,7 +786,7 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
     short_oid = f"_{oid[:8]}" if is_token and oid else ""
 
     if "image_uris" in card_en:
-        # Single-faced
+        # Single-faced card (may still have card_faces for prepare/adventure layout)
         row["card_file_front"] = f"{safe_en}{short_oid}_front.jpg"
         # Download localized image if available, else EN
         img_url = None
@@ -749,16 +799,57 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
         
         row["name_front"] = en
         row["type_front"] = card_en.get("type_line", "")
-        
-        row["text_front_en"] = get_card_text(card_en, "en")
-        row["text_front_ja"] = get_card_text(card_ja or card_en, "ja")
-        if not looks_japanese(row["text_front_ja"]):
-            [_, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
-            if looks_japanese(jp_txt):
-                row["text_front_ja"] = jp_txt
+
+        # Check if this is a prepare spell (single image but has card_faces)
+        # Prepare spells embed the spell face inside card_faces but share one card image.
+        faces_en = card_en.get("card_faces", [])
+        if len(faces_en) >= 2:
+            # Prepare spell: front face = creature, back face = the prepare spell
+            face1_en = faces_en[0]
+            face2_en = faces_en[1]
+            face1_ja = (card_ja.get("card_faces", []) or [None])[0] if card_ja else None
+            face2_ja = (card_ja.get("card_faces", []) or [None, None])[1] if card_ja and len(card_ja.get("card_faces", [])) > 1 else None
+
+            row["name_front"] = face1_en.get("name", en)
+            row["name_back"] = face2_en.get("name", "")
+            row["type_front"] = face1_en.get("type_line", card_en.get("type_line", ""))
+            row["type_back"] = face2_en.get("type_line", "")
+            row["mana_cost"] = face1_en.get("mana_cost", card_en.get("mana_cost", ""))
+
+            # English text: use face oracle_text
+            row["text_front_en"] = face1_en.get("oracle_text", "")
+            row["text_back_en"] = face2_en.get("oracle_text", "")
+
+            # Japanese text: try printed_text from ja card faces
+            row["text_front_ja"] = (face1_ja.get("printed_text") or face1_ja.get("oracle_text") or "") if face1_ja else ""
+            row["text_back_ja"] = (face2_ja.get("printed_text") or face2_ja.get("oracle_text") or "") if face2_ja else ""
+
+            # Fallback to Wisdom Guild for front
+            if not is_cached and not looks_japanese(row["text_front_ja"]):
+                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+                if jp_name:
+                    row["name_front"] = jp_name
+                if looks_japanese(jp_txt):
+                    row["text_front_ja"] = jp_txt
+
+            # Fallback to Wisdom Guild for back (prepare spell face)
+            if not is_cached and not looks_japanese(row["text_back_ja"]):
+                [jp_name, jp_txt] = fetch_text_from_wisdom_guild(en, "back")
+                if jp_name:
+                    row["name_back"] = jp_name
+                if looks_japanese(jp_txt):
+                    row["text_back_ja"] = jp_txt
+        else:
+            # Truly single-faced card
+            row["text_front_en"] = get_card_text(card_en, "en")
+            row["text_front_ja"] = get_card_text(card_ja or card_en, "ja")
+            if not is_cached and not looks_japanese(row["text_front_ja"]):
+                [_, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
+                if looks_japanese(jp_txt):
+                    row["text_front_ja"] = jp_txt
     
     elif "card_faces" in card_en and len(card_en["card_faces"]) >= 2:
-        # Double-faced
+        # Double-faced card (each face has its own image_uris)
         face1_en, face2_en = card_en["card_faces"]
         face1_ja = card_ja["card_faces"][0] if card_ja and "card_faces" in card_ja else face1_en
         face2_ja = card_ja["card_faces"][1] if card_ja and "card_faces" in card_ja else face2_en
@@ -780,13 +871,13 @@ def create_card_row(name: str, out_dir: Path, language: str = "ja", count: int =
         row["text_front_en"] = get_card_text(face1_en, "en")
         row["text_back_en"] = get_card_text(face2_en, "en")
         row["text_front_ja"] = get_card_text(face1_ja or face1_en, "ja")
-        if not looks_japanese(row["text_front_ja"]):
+        if not is_cached and not looks_japanese(row["text_front_ja"]):
             [_, jp_txt] = fetch_text_from_wisdom_guild(en, "front")
             if looks_japanese(jp_txt):
                 row["text_front_ja"] = jp_txt
         
         row["text_back_ja"] = get_card_text(face2_ja or face2_en, "ja")
-        if not looks_japanese(row["text_back_ja"]):
+        if not is_cached and not looks_japanese(row["text_back_ja"]):
             [_, jp_txt] = fetch_text_from_wisdom_guild(en, "back")
             if looks_japanese(jp_txt):
                 row["text_back_ja"] = jp_txt
