@@ -480,7 +480,7 @@ class SectionWidget(QWidget):
         # Notify MainWindow (if it's the owner of self.cards)
         # We need DeckBuildingWindow to have a reference to MainWindow or emit a signal
         # DeckBuildingWindow actually has self.data_changed signal
-        self.window().data_changed.emit()
+        self.window().data_debounce_timer.start()
 
 class DeckBuildingWindow(QWidget):
     data_changed = pyqtSignal()
@@ -560,8 +560,6 @@ class DeckBuildingWindow(QWidget):
         self.scroll.setWidget(self.content)
         
         self.main_layout.addWidget(self.scroll)
-
-        self.data_changed.connect(lambda: self.data_debounce_timer.start())
 
         self.load_considerations()
         self.build_sections()
@@ -1090,7 +1088,7 @@ class DeckBuildingWindow(QWidget):
 
             # Download selected face
             import requests
-            data = requests.get(face["image_normal"], timeout=5).content
+            data = requests.get(face["image_normal"], headers={"User-Agent": "CommanderTool/1.0"}, timeout=5).content
             if face["face_index"] == 0:
                 front_path.write_bytes(data)
             elif back_path:
@@ -1103,7 +1101,7 @@ class DeckBuildingWindow(QWidget):
                         r["lang"] == face["lang"] and 
                         r["face_index"] != face["face_index"]):
                         
-                        other_data = requests.get(r["image_normal"], timeout=5).content
+                        other_data = requests.get(r["image_normal"], headers={"User-Agent": "CommanderTool/1.0"}, timeout=5).content
                         if face["face_index"] == 0:
                             back_path.write_bytes(other_data)
                         else:
@@ -1145,7 +1143,7 @@ class DeckBuildingWindow(QWidget):
             # 2. Download and save
             try:
                 import requests
-                data = requests.get(face["image_normal"], timeout=5).content
+                data = requests.get(face["image_normal"], headers={"User-Agent": "CommanderTool/1.0"}, timeout=5).content
                 new_path.write_bytes(data)
                 
                 # 3. Create new card entry

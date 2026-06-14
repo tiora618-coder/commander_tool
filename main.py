@@ -123,7 +123,7 @@ class VersionCheckThread(QThread):
     def run(self):
         try:
             url = "https://api.github.com/repos/tiora618-coder/commander_tool/releases/latest"
-            response = requests.get(url, timeout=5)
+            response = requests.get(url, headers={"User-Agent": "CommanderTool/1.0"}, timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 tag_name = data.get("tag_name", "")
@@ -260,7 +260,7 @@ def ensure_emojis(splash=None):
         if splash: splash.update_status("Downloading mana symbols (First time setup)...", 10)
         logging.info("Downloading mana emojis from GitHub...")
         
-        response = requests.get(EMOJI_ZIP_URL, stream=True, timeout=15)
+        response = requests.get(EMOJI_ZIP_URL, headers={"User-Agent": "CommanderTool/1.0"}, stream=True, timeout=15)
         response.raise_for_status()
         
         total_size = int(response.headers.get('content-length', 0))
@@ -1240,7 +1240,7 @@ class MainWindow(QWidget):
 
             # Download selected face
             import requests
-            data = requests.get(face["image_normal"], timeout=5).content
+            data = requests.get(face["image_normal"], headers={"User-Agent": "CommanderTool/1.0"}, timeout=5).content
             if face["face_index"] == 0:
                 front_path.write_bytes(data)
             elif back_path:
@@ -1253,7 +1253,7 @@ class MainWindow(QWidget):
                         r["lang"] == face["lang"] and 
                         r["face_index"] != face["face_index"]):
                         
-                        other_data = requests.get(r["image_normal"], timeout=5).content
+                        other_data = requests.get(r["image_normal"], headers={"User-Agent": "CommanderTool/1.0"}, timeout=5).content
                         if face["face_index"] == 0:
                             back_path.write_bytes(other_data)
                         else:
@@ -1297,7 +1297,7 @@ class MainWindow(QWidget):
             
             # 2. Download and save
             try:
-                data = requests.get(face["image_normal"], timeout=5).content
+                data = requests.get(face["image_normal"], headers={"User-Agent": "CommanderTool/1.0"}, timeout=5).content
                 new_path.write_bytes(data)
                 
                 # 3. Create new card entry

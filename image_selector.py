@@ -22,6 +22,9 @@ class ImageLoader(QRunnable):
         self.dpr = dpr
         self.signals = ImageResult()
         self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "CommanderTool/1.0"
+        })
 
     def run(self):
         try:

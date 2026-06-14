@@ -142,6 +142,9 @@ def search_card_images(card_name: str, languages=("ja",), is_token: bool = False
     results = []
     
     with requests.Session() as session:
+        session.headers.update({
+            "User-Agent": "CommanderTool/1.0"
+        })
         # 1. Determine Search Query
         if is_token:
             # Consolidation: Search all tokens with this name in all languages at once
@@ -327,7 +330,7 @@ def download_image(url: str, path: Path):
     if path.exists() and path.stat().st_size > 0:
         return False   # Not downloaded
 
-    r = requests.get(url)
+    r = session.get(url)
     r.raise_for_status()
     path.write_bytes(r.content)
     return True        # Downloaded as a new file

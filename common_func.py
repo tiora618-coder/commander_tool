@@ -52,7 +52,7 @@ def load_or_download_card_back(back_path: Path) -> QPixmap:
     url = "https://cards.scryfall.io/back.png"
 
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers={"User-Agent": "CommanderTool/1.0"}, timeout=10)
         response.raise_for_status()
 
         with back_path.open("wb") as f:
